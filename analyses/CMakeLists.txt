@@ -1,4 +1,4 @@
-add_llvm_loadable_module(LLVMWyvern MODULE Wyvern.cpp)
+add_llvm_library(LLVMWyvern MODULE Wyvern.cpp)
 
 if(APPLE)
 	set_target_properties(LLVMWyvern PROPERTIES
