@@ -54,27 +54,3 @@ modified in a program path. Our technique therefore could actually be
 complementary with theirs: after being transformed by our optimization, a
 program is more likely to contain pure function calls that can be hoisted
 out interprocedurally.
-
--------------------------------------------------------------------------------
-
-(5) "The Theory and Practice of Transforming Call-By-Need Into Call-By-Value"
-Alan Mycroft (U of Edinburgh)
-International Symposium on Programming '80
-URL: https://dl.acm.org/doi/10.5555/647324.721526 
-
-This paper by is quite related to what we do, in the sense that it does the
-same thing in the opposite direction. That is, it provides the theory behind
-a system to find arguments that can be eagerly evaluated in languages which
-are traditionally always lazily evaluated. The motivation for their work is that
-call-by-value (eager evaluation) is generally cheaper to implement in most
-architectures, since there is no need to pass closures across function call
-boundaries. Thus, it would be profitable to use eager evaluation whenever
-possible. The author proposes a system where one can compute, for a given
-function: (1) whether any of its formal parameters can always be evaluated
-before the call is made, across all calls of the function; and (2) whether
-the computation of any of the actual parameters used across all calls of a
-function are guaranteed to always terminate, thus making them "replaceable" by
-the computed value eagerly. The intersection of these two sets gives a set of
-arguments which can be eagerly evaluated before function calls are performed,
-and replaced by their computed values rather than be passed across function
-boundaries.

@@ -16,4 +16,4 @@ if (${LLVM_VERSION_MAJOR} VERSION_GREATER_EQUAL 10)
 	set(CMAKE_CXX_STANDARD 14)
 endif ()
 
-add_subdirectory(find-lazyfiable)
+add_subdirectory(passes)
