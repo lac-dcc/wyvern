@@ -13,15 +13,16 @@ void _wyinstr_init(int num_functions) {
 
 void _wyinstr_dump(int num_functions) {
 	int i;
-	fprintf(stderr, "fun_id,runs,runs_with_all_used\n");
+	FILE *outfile = fopen("wyinstr_output.csv", "w");
+	fprintf(outfile, "fun_id,runs,runs_with_all_used\n");
 	for (i = 0; i < num_functions; i++) {
-		fprintf(stderr, "%d,%lli,%lli\n", i, _wyinstr_log[i][0], _wyinstr_log[i][1]);
+		fprintf(outfile, "%d,%lli,%lli\n", i, _wyinstr_log[i][0], _wyinstr_log[i][1]);
 	}
+	fclose(outfile);
 
 	for (i = 0; i < num_functions; i++) {
 		free(_wyinstr_log[i]);
 	}
-
 	free(_wyinstr_log);
 }
 
