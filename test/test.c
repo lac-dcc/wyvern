@@ -1,3 +1,7 @@
+// This simple test contains two functions which have paths where at least
+// one of their arguments is not used, and should thus be candidates for
+// lazyfication.
+
 #include <stdio.h>
 
 int bar(int x, int y) {
