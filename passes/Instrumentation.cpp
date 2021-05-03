@@ -53,6 +53,12 @@ void WyvernInstrumentationPass::InstrumentFunction(Function *F, long long func_i
 			if (auto *V = dyn_cast<Value>(&U)) {
 				if (vArgs.count(V) > 0) {
 					IRBuilder<> builder(&*I);
+
+					if (isa<PHINode>(&*I)) {
+						BasicBlock *BB = I->getParent();
+						builder.SetInsertPoint(BB, BB->getFirstInsertionPt());
+					} 
+
 					ConstantInt* argIndex = ConstantInt::get(F->getParent()->getContext(), llvm::APInt(32, vArgs[V], true));
 					Value* args[] = { usedBits, argIndex };
 					builder.CreateCall(markFun, args);
