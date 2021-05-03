@@ -31,6 +31,7 @@ void FindLazyfiableAnalysis::DFS(BasicBlock *first, BasicBlock *exit, std::set<B
 			auto pair = std::make_pair(cur->getParent(), index);
 			lazyPaths.insert(pair);
 			lazyFunctions.insert(cur->getParent());
+			return;
 		}
 
 		for (auto it = succ_begin(cur), it_end = succ_end(cur); it != it_end; ++it) {
@@ -55,10 +56,9 @@ void FindLazyfiableAnalysis::findLazyfiablePaths(Function &F) {
 		}
 	}
 
-	std::set<BasicBlock*> visited;
-	std::set<Value*> used;
 	unsigned int index = 0;
 	for (auto &arg : F.args()) {
+		std::set<BasicBlock*> visited;
 		if (Value *vArg = dyn_cast<Value>(&arg)) {
 			DFS(&entry, exit, visited, vArg, index);
 		}
