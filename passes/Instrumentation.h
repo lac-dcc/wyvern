@@ -18,6 +18,7 @@ struct WyvernInstrumentationPass : public ModulePass {
 	FunctionCallee dumpFun;
 	FunctionCallee logFun;
 
+	void addMissingUses(Module &M);
 	void InstrumentExit(Function *F, long long func_id, AllocaInst *bits); 
 	void InstrumentFunction(Function *F, long long func_id); 
 	AllocaInst* InstrumentEntry(Function *F);

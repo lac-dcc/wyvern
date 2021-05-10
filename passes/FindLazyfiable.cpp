@@ -14,6 +14,9 @@ void FindLazyfiableAnalysis::DFS(BasicBlock *first, BasicBlock *exit, std::set<B
 		st.pop();
 		bool hasUse = false;
 		for (Instruction &I : *cur) {
+			if (isa<PHINode>(I)) {
+				continue;
+			}
 			for (Use &U : I.operands()) {
 				if (Value *vUse = dyn_cast<Value>(U)) {
 					if (vUse == arg) {

@@ -68,6 +68,29 @@ void WyvernInstrumentationPass::InstrumentFunction(Function *F, long long func_i
 	}	
 }
 
+void WyvernInstrumentationPass::addMissingUses(Module &M) {
+	for (Function &F : M) {
+		std::set<Value*> vArgs;
+		for (auto &arg : F.args()) {
+			if (Value* vArg = dyn_cast<Value>(&arg)) {
+				vArgs.insert(vArg);
+			}	
+		}
+
+		for (auto I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+			if (PHINode *PN = dyn_cast<PHINode>(&*I)) {
+				for (auto &value : PN->operands()) {
+					if (vArgs.count(value)) {
+						BasicBlock* incBlock = PN->getIncomingBlock(value);
+						IRBuilder<> builder(incBlock, --incBlock->end());
+						builder.CreateOr(value, value);
+					}
+				}
+			}
+		}
+	}
+}
+
 bool WyvernInstrumentationPass::runOnModule(Module &M) {
 	LLVMContext& Ctx = M.getContext();
 
@@ -76,6 +99,8 @@ bool WyvernInstrumentationPass::runOnModule(Module &M) {
 	markFun = M.getOrInsertFunction("_wyinstr_mark", Type::getVoidTy(Ctx), Type::getInt64Ty(Ctx)->getPointerTo(), Type::getInt32Ty(Ctx));
 	dumpFun = M.getOrInsertFunction("_wyinstr_dump", Type::getVoidTy(Ctx), Type::getInt32Ty(Ctx));
 	logFun = M.getOrInsertFunction("_wyinstr_log_func", Type::getVoidTy(Ctx), Type::getInt64Ty(Ctx)->getPointerTo(), Type::getInt32Ty(Ctx), Type::getInt64Ty(Ctx));
+
+	addMissingUses(M);
 
 	FindLazyfiableAnalysis &FLA = getAnalysis<FindLazyfiableAnalysis>();
 	int num_instrumented_funcs = FLA.lazyFunctions.size();
