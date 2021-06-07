@@ -68,7 +68,25 @@ void WyvernInstrumentationPass::InstrumentFunction(Function *F, long long func_i
 	}	
 }
 
-void WyvernInstrumentationPass::addMissingUses(Module &M) {
+void removeDummyFunctions(std::set<Function*> dummyFunctions) {
+	for (auto &F : dummyFunctions) {
+		for (auto User : F->users()) {
+			CallInst* dummyFunCall = (CallInst*) User;
+			dummyFunCall->eraseFromParent();
+		}
+		F->eraseFromParent();
+	}
+}
+
+std::string getFunctionNameForType(Type* Type) {
+	std::string typeName;
+	raw_string_ostream typeNameOs(typeName);
+	Type->print(typeNameOs);
+	return "dummy_fun" + typeNameOs.str();
+}
+
+std::set<Function*> WyvernInstrumentationPass::addMissingUses(Module &M, LLVMContext& Ctx) {
+	std::set<Function*> dummyFunctions;
 	for (Function &F : M) {
 		std::set<Value*> vArgs;
 		for (auto &arg : F.args()) {
@@ -80,18 +98,26 @@ void WyvernInstrumentationPass::addMissingUses(Module &M) {
 		for (auto I = inst_begin(F), E = inst_end(F); I != E; ++I) {
 			if (PHINode *PN = dyn_cast<PHINode>(&*I)) {
 				for (auto &value : PN->operands()) {
-					if (vArgs.count(value)) {
-						BasicBlock* incBlock = PN->getIncomingBlock(value);
-						IRBuilder<> builder(incBlock, --incBlock->end());
-						builder.CreateOr(value, value);
+					if (!vArgs.count(value)) {
+						continue;
 					}
+
+					std::string functionName = getFunctionNameForType(value->getType());
+					FunctionCallee dummyFunction = M.getOrInsertFunction(functionName, Type::getVoidTy(Ctx), value->getType());
+					dummyFunctions.insert((Function*) dummyFunction.getCallee());
+					Value* args[] = { value };
+					BasicBlock* incBlock = PN->getIncomingBlock(value);
+					IRBuilder<> builder(incBlock, --incBlock->end());
+					builder.CreateCall(dummyFunction, args);
 				}
 			}
 		}
 	}
+	return dummyFunctions;
 }
 
 bool WyvernInstrumentationPass::runOnModule(Module &M) {
+	errs() << "Got here!\n";
 	LLVMContext& Ctx = M.getContext();
 
 	initFun = M.getOrInsertFunction("_wyinstr_init", Type::getVoidTy(Ctx), Type::getInt32Ty(Ctx));
@@ -100,11 +126,20 @@ bool WyvernInstrumentationPass::runOnModule(Module &M) {
 	dumpFun = M.getOrInsertFunction("_wyinstr_dump", Type::getVoidTy(Ctx), Type::getInt32Ty(Ctx));
 	logFun = M.getOrInsertFunction("_wyinstr_log_func", Type::getVoidTy(Ctx), Type::getInt64Ty(Ctx)->getPointerTo(), Type::getInt32Ty(Ctx), Type::getInt64Ty(Ctx));
 
-	addMissingUses(M);
+	std::set<Function*> dummyFunctions = addMissingUses(M, Ctx);
 
 	FindLazyfiableAnalysis &FLA = getAnalysis<FindLazyfiableAnalysis>();
 	int num_instrumented_funcs = FLA.lazyFunctions.size();
 	ConstantInt* num_funcs_arg = ConstantInt::get(Ctx, llvm::APInt(32, num_instrumented_funcs, true));
+
+	std::error_code ec;
+	raw_fd_ostream outfile("function_ids.csv", ec);
+	outfile << "function,id\n";
+	long long func_id = 0;
+	for (auto const &F : FLA.lazyFunctions) {
+		outfile << F->getName() << "," << func_id << "\n";
+		InstrumentFunction(F, func_id++);
+	}
 
 	for (Function &F : M) {
 		if (F.getName() != "main") {
@@ -126,14 +161,7 @@ bool WyvernInstrumentationPass::runOnModule(Module &M) {
 		}
 	}
 
-	std::error_code ec;
-	raw_fd_ostream outfile("function_ids.csv", ec);
-	outfile << "function,id\n";
-	long long func_id = 0;
-	for (auto const &F : FLA.lazyFunctions) {
-		outfile << F->getName() << "," << func_id << "\n";
-		InstrumentFunction(F, func_id++);
-	}
+	removeDummyFunctions(dummyFunctions);
 
 	return true;
 }
