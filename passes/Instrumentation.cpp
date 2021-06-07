@@ -117,7 +117,6 @@ std::set<Function*> WyvernInstrumentationPass::addMissingUses(Module &M, LLVMCon
 }
 
 bool WyvernInstrumentationPass::runOnModule(Module &M) {
-	errs() << "Got here!\n";
 	LLVMContext& Ctx = M.getContext();
 
 	initFun = M.getOrInsertFunction("_wyinstr_init", Type::getVoidTy(Ctx), Type::getInt32Ty(Ctx));
