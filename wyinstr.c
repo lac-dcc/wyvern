@@ -1,15 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-long long **_wyinstr_log;
-
-void _wyinstr_init(int num_functions) {
-	_wyinstr_log = (long long **) malloc(num_functions * sizeof(long long *));
-	long long i;
-	for (i = 0; i < num_functions; i++) {
-		_wyinstr_log[i] = (long long *) malloc(2 * sizeof(long long));
-	}
-}
+long long _wyinstr_log[65000][2];
 
 void _wyinstr_dump(int num_functions) {
 	int i;
@@ -19,11 +11,6 @@ void _wyinstr_dump(int num_functions) {
 		fprintf(outfile, "%d,%lli,%lli\n", i, _wyinstr_log[i][0], _wyinstr_log[i][1]);
 	}
 	fclose(outfile);
-
-	for (i = 0; i < num_functions; i++) {
-		free(_wyinstr_log[i]);
-	}
-	free(_wyinstr_log);
 }
 
 void _wyinstr_mark(long long *bits, int arg) {
