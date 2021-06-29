@@ -34,7 +34,7 @@ AllocaInst* WyvernInstrumentationPass::InstrumentEntry(Function *F) {
 	return alloc;
 }
 	
-void WyvernInstrumentationPass::InstrumentFunction(Function *F, long long func_id) { 
+void WyvernInstrumentationPass::InstrumentFunction(Function *F, long long func_id) {
 	AllocaInst* usedBits = InstrumentEntry(F);
 	InstrumentExit(F, func_id, usedBits);
 
@@ -78,11 +78,14 @@ void removeDummyFunctions(std::set<Function*> dummyFunctions) {
 	}
 }
 
-std::string getFunctionNameForType(Type* Type) {
+FunctionCallee getDummyFunctionForType(Module &M, Type* Type) {
+	LLVMContext& Ctx = M.getContext();
 	std::string typeName;
 	raw_string_ostream typeNameOs(typeName);
 	Type->print(typeNameOs);
-	return "dummy_fun" + typeNameOs.str();
+	std::string dummyFunctionName = "dummy_fun" + typeNameOs.str();
+	FunctionCallee dummyFunction = M.getOrInsertFunction(dummyFunctionName, Type::getVoidTy(Ctx), Type);
+	return dummyFunction;
 }
 
 std::set<Function*> WyvernInstrumentationPass::addMissingUses(Module &M, LLVMContext& Ctx) {
@@ -102,9 +105,8 @@ std::set<Function*> WyvernInstrumentationPass::addMissingUses(Module &M, LLVMCon
 						continue;
 					}
 
-					std::string functionName = getFunctionNameForType(value->getType());
-					FunctionCallee dummyFunction = M.getOrInsertFunction(functionName, Type::getVoidTy(Ctx), value->getType());
-					dummyFunctions.insert((Function*) dummyFunction.getCallee());
+					FunctionCallee dummyFunction = getDummyFunctionForType(M, value->getType());
+					dummyFunctions.insert((Function *) dummyFunction.getCallee());
 					Value* args[] = { value };
 					BasicBlock* incBlock = PN->getIncomingBlock(value);
 					IRBuilder<> builder(incBlock, --incBlock->end());
@@ -116,10 +118,34 @@ std::set<Function*> WyvernInstrumentationPass::addMissingUses(Module &M, LLVMCon
 	return dummyFunctions;
 }
 
+void WyvernInstrumentationPass::InstrumentExitPoints(Module &M, Value* num_funcs_arg) {
+	LLVMContext& Ctx = M.getContext();
+	Value* args[] = { num_funcs_arg };
+
+	for (Function &F : M) {
+		for (inst_iterator I = inst_begin(F); I != inst_end(F); ++I) {
+			if (F.getName() == "main") {
+				if (auto *RI = dyn_cast<ReturnInst>(&*I)) {
+					IRBuilder<> builder(RI);
+					builder.CreateCall(dumpFun, args);
+				}
+			}
+
+			if (auto *CI = dyn_cast<CallInst>(&*I)) {
+				if (CI->getCalledFunction() &&
+					(CI->getCalledFunction()->getName() == "exit" ||
+					CI->getCalledFunction()->getName() == "abort")) {
+					IRBuilder<> builder(CI);
+					builder.CreateCall(dumpFun, args);
+				}
+			}
+		}
+	}
+}
+
 bool WyvernInstrumentationPass::runOnModule(Module &M) {
 	LLVMContext& Ctx = M.getContext();
 
-	initFun = M.getOrInsertFunction("_wyinstr_init", Type::getVoidTy(Ctx), Type::getInt32Ty(Ctx));
 	initBitsFun = M.getOrInsertFunction("_wyinstr_initbits", Type::getInt64Ty(Ctx));
 	markFun = M.getOrInsertFunction("_wyinstr_mark", Type::getVoidTy(Ctx), Type::getInt64Ty(Ctx)->getPointerTo(), Type::getInt32Ty(Ctx));
 	dumpFun = M.getOrInsertFunction("_wyinstr_dump", Type::getVoidTy(Ctx), Type::getInt32Ty(Ctx));
@@ -128,8 +154,6 @@ bool WyvernInstrumentationPass::runOnModule(Module &M) {
 	std::set<Function*> dummyFunctions = addMissingUses(M, Ctx);
 
 	FindLazyfiableAnalysis &FLA = getAnalysis<FindLazyfiableAnalysis>();
-	int num_instrumented_funcs = FLA.lazyFunctions.size();
-	ConstantInt* num_funcs_arg = ConstantInt::get(Ctx, llvm::APInt(32, num_instrumented_funcs, true));
 
 	std::error_code ec;
 	raw_fd_ostream outfile("function_ids.csv", ec);
@@ -140,25 +164,9 @@ bool WyvernInstrumentationPass::runOnModule(Module &M) {
 		InstrumentFunction(F, func_id++);
 	}
 
-	for (Function &F : M) {
-		if (F.getName() != "main") {
-			continue;
-		}
-
-		inst_iterator I = inst_begin(F);
-		Instruction& first_inst = *I;
-		IRBuilder<> builder(&first_inst);
-		Value* args[] = { num_funcs_arg };
-		builder.CreateCall(initFun, args);
-
-		for (inst_iterator E = inst_end(F); I != E; ++I) {
-			if (auto *RI = dyn_cast<ReturnInst>(&*I)) {
-				IRBuilder<> builder(RI);
-				Value* args[] = { num_funcs_arg };
-				builder.CreateCall(dumpFun, args);
-			}
-		}
-	}
+	int num_instrumented_funcs = FLA.lazyFunctions.size();
+	ConstantInt* num_funcs_arg = ConstantInt::get(Ctx, llvm::APInt(32, num_instrumented_funcs, true));
+	InstrumentExitPoints(M, num_funcs_arg);
 
 	removeDummyFunctions(dummyFunctions);
 

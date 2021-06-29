@@ -5,6 +5,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
 
 
 namespace llvm {
@@ -13,12 +14,12 @@ struct WyvernInstrumentationPass : public ModulePass {
 	WyvernInstrumentationPass() : ModulePass(ID) {}
 
 	FunctionCallee initBitsFun;
-	FunctionCallee initFun;
 	FunctionCallee markFun;
 	FunctionCallee dumpFun;
 	FunctionCallee logFun;
 
 	std::set<Function*> addMissingUses(Module &M, LLVMContext &Ctx);
+	void InstrumentExitPoints(Module &M, Value* num_funcs_arg);
 	void InstrumentExit(Function *F, long long func_id, AllocaInst *bits); 
 	void InstrumentFunction(Function *F, long long func_id); 
 	AllocaInst* InstrumentEntry(Function *F);
