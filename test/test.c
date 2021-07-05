@@ -5,8 +5,6 @@
 #include <stdio.h>
 
 int bar(int x, int y) {
-	long long bits = 0;
-
 	if (x >= 10) {
 		fprintf(stdout, "y = %d\n", y);
 	}
@@ -15,8 +13,6 @@ int bar(int x, int y) {
 }
 
 int foo(int x, int y, int z, int i) {
-	long long bits = 0;
-
 	if (x > 0) {
 		fprintf(stdout, "num = %d\n", y * 2 + z - i);
 		return 1;
