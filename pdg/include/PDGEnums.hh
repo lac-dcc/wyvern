@@ -1,0 +1,58 @@
+#ifndef PDGENUMS_H_
+#define PDGENUMS_H_
+
+namespace pdg
+{
+  enum class EdgeType
+  {
+    IND_CALL,
+    CONTROLDEP_CALLINV,
+    CONTROLDEP_CALLRET,
+    CONTROLDEP_ENTRY,
+    CONTROLDEP_BR,
+    CONTROLDEP_IND_BR,
+    DATA_DEF_USE,
+    DATA_RAW,
+    DATA_READ,
+    DATA_ALIAS,
+    DATA_RET,
+    PARAMETER_IN,
+    PARAMETER_OUT,
+    PARAMETER_FIELD,
+    GLOBAL_DEP,
+    VAL_DEP,
+    ANNO_VAR,
+    ANNO_GLOBAL,
+    ANNO_OTHER,
+    TYPE_OTHEREDGE
+  };
+
+  enum class GraphNodeType
+  {
+    INST_FUNCALL,
+    INST_RET,
+    INST_BR,
+    INST_OTHER,
+    FUNC_ENTRY,
+    PARAM_FORMALIN,
+    PARAM_FORMALOUT,
+    PARAM_ACTUALIN,
+    PARAM_ACTUALOUT,
+    VAR_STATICALLOCGLOBALSCOPE,
+    VAR_STATICALLOCMODULESCOPE,
+    VAR_STATICALLOCFUNCTIONSCOPE,
+    VAR_OTHER,
+    FUNC,
+    ANNO_VAR,
+    ANNO_GLOBAL,
+    ANNO_OTHER
+  };
+
+  enum class AccessTag
+  {
+    DATA_READ,
+    DATA_WRITE
+  };
+}
+
+#endif

@@ -1,0 +1,22 @@
+WARNING: You're attempting to print out a bitcode file.
+This is inadvisable as it may cause display problems. If
+you REALLY want to taste LLVM bitcode first-hand, you
+can force output with the `-f' option.
+
+ARGW size: 1
+ARGW size: 2
+  %7 = bitcast i32** %6 to i8*
+  %9 = bitcast i8* %8 to i32*
+  %12 = bitcast i32* %11 to i8*
+  %7 = bitcast i32** %6 to i8*
+  %9 = bitcast i8* %8 to i32*
+  %12 = bitcast i32* %11 to i8*
+ARGW size: 1
+ARGW size: 3
+pz_malloc: 1
+pz_free: 2
+main: 1
+main: 3
+Writing 'pdgragh.pz_malloc.dot'...
+Writing 'pdgragh.pz_free.dot'...
+Writing 'pdgragh.main.dot'...
