@@ -3,6 +3,10 @@
 
 using namespace llvm;
 
+static cl::opt<bool> WyvernInstrumentAll("wyinstr-all", cl::init(false),
+	cl::desc("Wyvern - Instrument all functions rather than only those with"
+	" paths that do not use an argument."));
+
 #define DEBUG_TYPE "WyvernInstrumentationPass"
 
 void WyvernInstrumentationPass::InstrumentExit(Function *F, long long func_id, AllocaInst* bits) {
@@ -157,14 +161,29 @@ bool WyvernInstrumentationPass::runOnModule(Module &M) {
 
 	std::error_code ec;
 	raw_fd_ostream outfile("function_ids.csv", ec);
-	outfile << "function,id\n";
+	outfile << "function,id,size\n";
 	long long func_id = 0;
-	for (auto const &F : FLA.lazyFunctions) {
-		outfile << F->getName() << "," << func_id << "\n";
-		InstrumentFunction(F, func_id++);
+	int num_instrumented_funcs; 
+
+	if (WyvernInstrumentAll) {
+		num_instrumented_funcs = M.size();
+		for (auto &F : M) {
+			if (F.isDeclaration()) {
+				continue;
+			}
+			outfile << F.getName() << "," << func_id << "," << F.size() << "\n";
+			InstrumentFunction(&F, func_id++);
+		}
+	}
+			
+	else {
+		num_instrumented_funcs = FLA.lazyFunctions.size();
+		for (auto const &F : FLA.lazyFunctions) {
+			outfile << F->getName() << "," << func_id << "," << F->size() << "\n";
+			InstrumentFunction(F, func_id++);
+		}
 	}
 
-	int num_instrumented_funcs = FLA.lazyFunctions.size();
 	ConstantInt* num_funcs_arg = ConstantInt::get(Ctx, llvm::APInt(32, num_instrumented_funcs, true));
 	InstrumentExitPoints(M, num_funcs_arg);
 

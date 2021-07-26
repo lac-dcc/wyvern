@@ -9,6 +9,8 @@
 #include "llvm/Pass.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "ProgramDependencyGraph.hh"
+#include "ProgramSlice.h"
 
 namespace llvm {
 struct FindLazyfiableAnalysis : public ModulePass {
@@ -20,9 +22,10 @@ struct FindLazyfiableAnalysis : public ModulePass {
 	std::map<std::pair<Function*, int>, int> lazyfiableCallSites;
 
 	bool runOnModule(Module&);
+	void getAnalysisUsage(AnalysisUsage&) const;
 	void DFS(BasicBlock*, BasicBlock*, std::set<BasicBlock*>&, Value*, int);
 	void findLazyfiablePaths(Function&);
-	bool isArgumentComplex(Instruction*, std::set<Instruction*>, int);
+	bool isArgumentComplex(Instruction&);
 	void analyzeCall(CallInst*);
 	void dump_results();
 };
