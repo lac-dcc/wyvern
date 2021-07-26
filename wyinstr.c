@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-long long _wyinstr_log[65000][2];
+long long _wyinstr_log[9000000][2];
 
 void _wyinstr_dump(int num_functions) {
 	int i;
