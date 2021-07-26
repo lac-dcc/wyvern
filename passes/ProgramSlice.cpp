@@ -56,6 +56,7 @@ void ProgramSlice::insertNewBB(BasicBlock *originalBB, Function *F) {
 void ProgramSlice::populateFunctionWithBBs(Function *F) {
 	for (Instruction *I : _instsInSlice) {
 		if (_origToNewBBmap.count(I->getParent()) == 0) {
+			errs() << "Adding BB for: " << I->getParent()->getName() << "\n";
 			insertNewBB(I->getParent(), F);
 		}
 		for (Use &U : I->operands()) {
@@ -120,6 +121,17 @@ void ProgramSlice::addMissingTerminators(Function *F) {
 	}
 }
 
+void ProgramSlice::reorderBlocks(Function *F) {
+	BasicBlock *realEntry = nullptr;
+	for (BasicBlock &BB : *F) {
+		if (BB.hasNPredecessors(0)) {
+			realEntry = &BB;
+		}
+	}
+	
+	realEntry->moveBefore(&F->getEntryBlock());
+}
+
 void ProgramSlice::addReturnValue(Function *F) {
 	BasicBlock *exit = nullptr;
 	for (BasicBlock &BB : *F) {
@@ -137,7 +149,7 @@ Function *ProgramSlice::outline() {
 	LLVMContext &Ctx = M->getContext();
 
 	FunctionType *FT = FunctionType::get(_initial->getType(), false);
-	std::string functionName = "_wyvern_slice_" + _initial->getParent()->getParent()->getName().str() + _initial->getName().str();
+	std::string functionName = "_wyvern_slice_" + _initial->getParent()->getParent()->getName().str() + "_" + _initial->getName().str();
 	Function *F = Function::Create(FT, Function::ExternalLinkage, functionName, M);
 
 	populateFunctionWithBBs(F);
@@ -145,6 +157,7 @@ Function *ProgramSlice::outline() {
 	addMissingTerminators(F);
 	reorganizeUses(F);
 	addReturnValue(F);
+	reorderBlocks(F);
 
 	verifyFunction(*F);
 

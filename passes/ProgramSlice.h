@@ -20,6 +20,7 @@ class ProgramSlice {
 		Function *outline();
 	
 	private:
+		void reorderBlocks(Function *F);
 		void addReturnValue(Function *F);
 		void reorganizeUses(Function *F);
 		void populateBBsWithInsts(Function *F);
