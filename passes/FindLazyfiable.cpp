@@ -49,7 +49,7 @@ void FindLazyfiableAnalysis::DFS(BasicBlock *first, BasicBlock *exit, std::set<B
 
 void FindLazyfiableAnalysis::findLazyfiablePaths(Function &F) {
 	BasicBlock& entry = F.getEntryBlock();
-	BasicBlock* exit;
+	BasicBlock* exit = nullptr;
 
 	for (BasicBlock &BB : F) {
 		for (Instruction &I : BB) {
@@ -57,6 +57,10 @@ void FindLazyfiableAnalysis::findLazyfiablePaths(Function &F) {
 				exit = &BB;
 			}
 		}
+	}
+
+	if (exit == nullptr) {
+		return;
 	}
 
 	unsigned int index = 0;
@@ -98,11 +102,10 @@ void FindLazyfiableAnalysis::analyzeCall(CallInst *CI) {
 		return;
 	}
 
-	std::set<Instruction*> analyzed_insts;
 	for (auto &arg : CI->args()) {
 		if (Instruction *I = dyn_cast<Instruction>(&arg)) {
 			unsigned int index = CI->getArgOperandNo(&arg);
-			if (isArgumentComplex(I, analyzed_insts, 0)) {
+			if (isArgumentComplex(*I)) {
 				auto pair = std::make_pair(Callee, index);
 				lazyfiableCallSites[pair] += 1;
 			}	
