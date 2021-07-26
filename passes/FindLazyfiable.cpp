@@ -73,27 +73,14 @@ void FindLazyfiableAnalysis::findLazyfiablePaths(Function &F) {
 	}
 }
 
-bool FindLazyfiableAnalysis::isArgumentComplex(Instruction *I, std::set<Instruction*> analyzed, int depth) {
-	if (depth > 12) {
-		return false;
-	}
+bool FindLazyfiableAnalysis::isArgumentComplex(Instruction& I) {
+	pdg::ProgramGraph *g = getAnalysis<pdg::ProgramDependencyGraph>().getPDG();
+	
+	ProgramSlice slice = ProgramSlice(I, g);
 
-	bool ret = false;
+	Function *thunk = slice.outline();
 
-	analyzed.insert(I);
-	if (CallInst *CI = dyn_cast<CallInst>(I)) {
-		return true;
-	}
-
-	for (auto &op : I->operands()) {
-		if (Instruction *I = dyn_cast<Instruction>(&op)) {
-			if (analyzed.count(I) == 0) {
-				ret |= isArgumentComplex(I, analyzed, depth+1);
-			}
-		}
-	}
-
-	return ret;
+	return true;
 }
 
 void FindLazyfiableAnalysis::analyzeCall(CallInst *CI) {
@@ -153,6 +140,10 @@ void FindLazyfiableAnalysis::dump_results() {
 			outfile << entry.first.first->getName() << "," << entry.first.second << "\n";
 		}
 	}
+}
+
+void FindLazyfiableAnalysis::getAnalysisUsage(AnalysisUsage &AU) const {
+	AU.addRequired<pdg::ProgramDependencyGraph>();
 }
 
 char FindLazyfiableAnalysis::ID = 0;
