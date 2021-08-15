@@ -2,3 +2,5 @@
 *.csv
 *.bc
 *.ll
+*.json
+build/
