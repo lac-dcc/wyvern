@@ -4,6 +4,15 @@
 
 using namespace llvm;
 
+/**
+ * Performs a DepthFirst Search over a function's CFG, attempting
+ * to find paths from entry BB @param first to exit BB @param exit
+ * which do not go through any use of argument @param arg.
+ * 
+ * If any such path is found, record them in the analysis' results
+ * and statistics.
+ *
+ */
 void FindLazyfiableAnalysis::DFS(BasicBlock *first, BasicBlock *exit, std::set<BasicBlock*> &visited, Value *arg, int index) {
 	std::stack<BasicBlock*> st;
 	st.push(first);
@@ -48,6 +57,13 @@ void FindLazyfiableAnalysis::DFS(BasicBlock *first, BasicBlock *exit, std::set<B
 	}
 }
 
+
+/**
+ * Searches for lazyfiable paths in function @param F, by
+ * checking whether there are paths in its CFG which do not
+ * use each of its input arguments.
+ *
+ */
 void FindLazyfiableAnalysis::findLazyfiablePaths(Function &F) {
 	BasicBlock& entry = F.getEntryBlock();
 	BasicBlock* exit = nullptr;
@@ -74,10 +90,20 @@ void FindLazyfiableAnalysis::findLazyfiablePaths(Function &F) {
 	}
 }
 
+/**
+ * Placeholder.
+ *
+ */
 bool FindLazyfiableAnalysis::isArgumentComplex(Instruction& I) {	
 	return true;
 }
 
+/**
+ * Analyzes a given function callsite @param CI, to evaluate whether
+ * any of its arguments can/should be encapsulated into a lazyfied
+ * lambda/sliced function.
+ *
+ */
 void FindLazyfiableAnalysis::analyzeCall(CallInst *CI) {
 	Function *Callee = CI->getCalledFunction();
 	if (Callee == nullptr || Callee->isDeclaration()) {
@@ -96,6 +122,11 @@ void FindLazyfiableAnalysis::analyzeCall(CallInst *CI) {
 	}
 }
 
+/**
+ * Removes dummy functions in @param dummyFunctions from the Module.
+ * These functions are added by addMissingUses.
+ *
+ */
 void removeDummyFunctions(std::set<Function*> dummyFunctions) {
 	for (auto &F : dummyFunctions) {
 		for (auto User : F->users()) {
@@ -106,6 +137,12 @@ void removeDummyFunctions(std::set<Function*> dummyFunctions) {
 	}
 }
 
+/**
+ * Creates a dummy function with signature "void dummy_fun(Type arg)"
+ * for a given @param Type, and inserts it into the module, so it
+ * can be used to simulate a use of a value of that given type.
+ *
+ */
 FunctionCallee getDummyFunctionForType(Module &M, Type* Type) {
 	LLVMContext& Ctx = M.getContext();
 	std::string typeName;
@@ -116,6 +153,13 @@ FunctionCallee getDummyFunctionForType(Module &M, Type* Type) {
 	return dummyFunction;
 }
 
+/**
+ * Traverses the module @param M, adding explicit uses of
+ * values which are used in PhiNodes. This ensures implicit
+ * value uses (which are only "visible" in control flow) are
+ * properly tracked when finding lazyfiable paths.
+ *
+ */
 std::set<Function*> FindLazyfiableAnalysis::addMissingUses(Module &M, LLVMContext& Ctx) {
 	std::set<Function*> dummyFunctions;
 	for (Function &F : M) {
@@ -170,6 +214,11 @@ bool FindLazyfiableAnalysis::runOnModule(Module &M) {
 	return false;
 }
 
+/**
+ * Dumps statistics for number of lazyfiable call sites and
+ * lazyfiable function paths found within the module.
+ *
+ */
 void FindLazyfiableAnalysis::dump_results() {
 	std::error_code ec;
 	raw_fd_ostream outfile("lazyfiable.csv", ec);
