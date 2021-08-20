@@ -10,27 +10,27 @@ using namespace llvm;
  *
  */
 ProgramSlice::ProgramSlice(Instruction &I, Function &F) {
-	assert(I.getParent()->getParent() == &F && "Slicing instruction from different function!");
-	
-	phoenix::ProgramDependenceGraph PDG;
-	PDG.compute_dependences(&F);
-	std::set<Value*> valuesInSlice = PDG.get_dependences_for(&I);
-	std::set<Instruction*> instsInSlice;
-	SmallVector<Argument*> depArgs;
+  assert(I.getParent()->getParent() == &F &&
+         "Slicing instruction from different function!");
 
-	for (auto &val : valuesInSlice) {
-		if (Argument *A = dyn_cast<Argument>(val)) {
-			depArgs.push_back(A);
-		}
-		else if (Instruction *I = dyn_cast<Instruction>(val)) {
-			instsInSlice.insert(I);
-		}
-	}
+  phoenix::ProgramDependenceGraph PDG;
+  PDG.compute_dependences(&F);
+  std::set<Value *> valuesInSlice = PDG.get_dependences_for(&I);
+  std::set<Instruction *> instsInSlice;
+  SmallVector<Argument *> depArgs;
 
-	_instsInSlice = instsInSlice;
-	_depArgs = depArgs;
-	_initial = &I;
-	_parentFunction = &F;
+  for (auto &val : valuesInSlice) {
+    if (Argument *A = dyn_cast<Argument>(val)) {
+      depArgs.push_back(A);
+    } else if (Instruction *I = dyn_cast<Instruction>(val)) {
+      instsInSlice.insert(I);
+    }
+  }
+
+  _instsInSlice = instsInSlice;
+  _depArgs = depArgs;
+  _initial = &I;
+  _parentFunction = &F;
 }
 
 /**
@@ -40,14 +40,13 @@ ProgramSlice::ProgramSlice(Instruction &I, Function &F) {
  * outlined slice functions.
  *
  */
-SmallVector<Value*> ProgramSlice::getOrigFunctionArgs() {
-	SmallVector<Value*> args;
-	for (auto &arg : _depArgs) {
-		args.push_back(cast<Value>(arg));
-	}
-	return args;
+SmallVector<Value *> ProgramSlice::getOrigFunctionArgs() {
+  SmallVector<Value *> args;
+  for (auto &arg : _depArgs) {
+    args.push_back(cast<Value>(arg));
+  }
+  return args;
 }
-
 
 /**
  * Inserts a new BasicBlock in Function @param F, corresponding
@@ -56,13 +55,13 @@ SmallVector<Value*> ProgramSlice::getOrigFunctionArgs() {
  *
  */
 void ProgramSlice::insertNewBB(BasicBlock *originalBB, Function *F) {
-	auto originalName = originalBB->getName();
-	std::string newBBName = "sliceclone_" + originalName.str();
-	BasicBlock *newBB = BasicBlock::Create(F->getParent()->getContext(), newBBName, F);
-	_origToNewBBmap.insert(std::make_pair(originalBB, newBB));
-	_newToOrigBBmap.insert(std::make_pair(newBB, originalBB));
+  auto originalName = originalBB->getName();
+  std::string newBBName = "sliceclone_" + originalName.str();
+  BasicBlock *newBB =
+      BasicBlock::Create(F->getParent()->getContext(), newBBName, F);
+  _origToNewBBmap.insert(std::make_pair(originalBB, newBB));
+  _newToOrigBBmap.insert(std::make_pair(newBB, originalBB));
 }
-
 
 /**
  * Populates function @param F with BasicBlocks, corresponding
@@ -71,20 +70,19 @@ void ProgramSlice::insertNewBB(BasicBlock *originalBB, Function *F) {
  *
  */
 void ProgramSlice::populateFunctionWithBBs(Function *F) {
-	for (Instruction *I : _instsInSlice) {
-		if (_origToNewBBmap.count(I->getParent()) == 0) {
-			insertNewBB(I->getParent(), F);
-		}
-		for (Use &U : I->operands()) {
-			if (BasicBlock *origBB = dyn_cast<BasicBlock>(&U)) {
-				if (_origToNewBBmap.count(origBB) == 0) {
-					insertNewBB(origBB, F);
-				}
-			}
-		}
-	}
+  for (Instruction *I : _instsInSlice) {
+    if (_origToNewBBmap.count(I->getParent()) == 0) {
+      insertNewBB(I->getParent(), F);
+    }
+    for (Use &U : I->operands()) {
+      if (BasicBlock *origBB = dyn_cast<BasicBlock>(&U)) {
+        if (_origToNewBBmap.count(origBB) == 0) {
+          insertNewBB(origBB, F);
+        }
+      }
+    }
+  }
 }
-
 
 /**
  * Adds slice instructions to function @param F, corresponding
@@ -92,16 +90,16 @@ void ProgramSlice::populateFunctionWithBBs(Function *F) {
  *
  */
 void ProgramSlice::populateBBsWithInsts(Function *F) {
-	for (BasicBlock &BB : *_parentFunction) {
-		for (Instruction &origInst : BB) {
-			if (_instsInSlice.count(&origInst)) {
-				Instruction *newInst = origInst.clone();
-				_Imap.insert(std::make_pair(&origInst, newInst));
-				IRBuilder<> builder(_origToNewBBmap[&BB]);
-				builder.Insert(newInst);
-			}
-		}
-	}
+  for (BasicBlock &BB : *_parentFunction) {
+    for (Instruction &origInst : BB) {
+      if (_instsInSlice.count(&origInst)) {
+        Instruction *newInst = origInst.clone();
+        _Imap.insert(std::make_pair(&origInst, newInst));
+        IRBuilder<> builder(_origToNewBBmap[&BB]);
+        builder.Insert(newInst);
+      }
+    }
+  }
 }
 
 /**
@@ -111,41 +109,41 @@ void ProgramSlice::populateBBsWithInsts(Function *F) {
  *
  */
 void ProgramSlice::reorganizeUses(Function *F) {
-	for (auto &pair : _origToNewBBmap) {
-		BasicBlock *originalBB = pair.first;
-		originalBB->replaceUsesWithIf(pair.second, [F](Use &U) {
-			auto *UserI = dyn_cast<Instruction>(U.getUser());
-			return UserI && UserI->getParent()->getParent() == F;
-		});
-		
-		for (auto  &pair : _Imap) {
-			Instruction *originalInst = pair.first;
-			Instruction *newInst = pair.second;
+  for (auto &pair : _origToNewBBmap) {
+    BasicBlock *originalBB = pair.first;
+    originalBB->replaceUsesWithIf(pair.second, [F](Use &U) {
+      auto *UserI = dyn_cast<Instruction>(U.getUser());
+      return UserI && UserI->getParent()->getParent() == F;
+    });
 
-			if (PHINode *PN = dyn_cast<PHINode>(newInst)) {
-				for (BasicBlock *BB : PN->blocks()) {
-					if (_origToNewBBmap.count(BB)) {
-						PN->replaceIncomingBlockWith(BB, _origToNewBBmap[BB]);
-					}
-				}
-			}
+    for (auto &pair : _Imap) {
+      Instruction *originalInst = pair.first;
+      Instruction *newInst = pair.second;
 
-			originalInst->replaceUsesWithIf(newInst, [F](Use &U) {
-				auto *UserI = dyn_cast<Instruction>(U.getUser());
-				return UserI && UserI->getParent()->getParent() == F;
-			});
-		}
+      if (PHINode *PN = dyn_cast<PHINode>(newInst)) {
+        for (BasicBlock *BB : PN->blocks()) {
+          if (_origToNewBBmap.count(BB)) {
+            PN->replaceIncomingBlockWith(BB, _origToNewBBmap[BB]);
+          }
+        }
+      }
 
-		for (auto &pair : _argMap) {
-			Argument *origArg = pair.first;
-			Argument *newArg = pair.second;
+      originalInst->replaceUsesWithIf(newInst, [F](Use &U) {
+        auto *UserI = dyn_cast<Instruction>(U.getUser());
+        return UserI && UserI->getParent()->getParent() == F;
+      });
+    }
 
-			origArg->replaceUsesWithIf(newArg, [F](Use &U) {
-				auto *UserI = dyn_cast<Instruction>(U.getUser());
-				return UserI && UserI->getParent()->getParent() == F;
-			});
-		}
-	}
+    for (auto &pair : _argMap) {
+      Argument *origArg = pair.first;
+      Argument *newArg = pair.second;
+
+      origArg->replaceUsesWithIf(newArg, [F](Use &U) {
+        auto *UserI = dyn_cast<Instruction>(U.getUser());
+        return UserI && UserI->getParent()->getParent() == F;
+      });
+    }
+  }
 }
 
 /**
@@ -155,14 +153,14 @@ void ProgramSlice::reorganizeUses(Function *F) {
  * original function.
  */
 void ProgramSlice::addMissingTerminators(Function *F) {
-	for (BasicBlock &BB : *F) {
-		if (BB.getTerminator() == nullptr) {
-			Instruction *originalTerminator = _newToOrigBBmap[&BB]->getTerminator();
-			Instruction *newTerminator = originalTerminator->clone();
-			IRBuilder<> builder(&BB);
-			builder.Insert(newTerminator);
-		}
-	}
+  for (BasicBlock &BB : *F) {
+    if (BB.getTerminator() == nullptr) {
+      Instruction *originalTerminator = _newToOrigBBmap[&BB]->getTerminator();
+      Instruction *newTerminator = originalTerminator->clone();
+      IRBuilder<> builder(&BB);
+      builder.Insert(newTerminator);
+    }
+  }
 }
 
 /**
@@ -171,14 +169,14 @@ void ProgramSlice::addMissingTerminators(Function *F) {
  * with no predecessors) is first in the layout.
  */
 void ProgramSlice::reorderBlocks(Function *F) {
-	BasicBlock *realEntry = nullptr;
-	for (BasicBlock &BB : *F) {
-		if (BB.hasNPredecessors(0)) {
-			realEntry = &BB;
-		}
-	}
-	
-	realEntry->moveBefore(&F->getEntryBlock());
+  BasicBlock *realEntry = nullptr;
+  for (BasicBlock &BB : *F) {
+    if (BB.hasNPredecessors(0)) {
+      realEntry = &BB;
+    }
+  }
+
+  realEntry->moveBefore(&F->getEntryBlock());
 }
 
 /**
@@ -187,15 +185,16 @@ void ProgramSlice::reorderBlocks(Function *F) {
  *
  */
 void ProgramSlice::addReturnValue(Function *F) {
-	BasicBlock *exit = nullptr;
-	for (BasicBlock &BB : *F) {
-		if (ReturnInst *RI = dyn_cast<ReturnInst>(BB.getTerminator())) {
-			exit = &BB;
-		}
-	}
+  BasicBlock *exit = nullptr;
+  for (BasicBlock &BB : *F) {
+    if (ReturnInst *RI = dyn_cast<ReturnInst>(BB.getTerminator())) {
+      exit = &BB;
+    }
+  }
 
-	exit->getTerminator()->eraseFromParent();
-	ReturnInst *new_ret = ReturnInst::Create(F->getParent()->getContext(), _Imap[_initial], exit);
+  exit->getTerminator()->eraseFromParent();
+  ReturnInst *new_ret =
+      ReturnInst::Create(F->getParent()->getContext(), _Imap[_initial], exit);
 }
 
 /**
@@ -204,12 +203,12 @@ void ProgramSlice::addReturnValue(Function *F) {
  * signature can be created to match it.
  *
  */
-SmallVector<Type*> ProgramSlice::getInputArgTypes() {
-	SmallVector<Type*> argTypes;
-	for(Argument *A : _depArgs) {
-		argTypes.emplace_back(A->getType());
-	}
-	return argTypes;
+SmallVector<Type *> ProgramSlice::getInputArgTypes() {
+  SmallVector<Type *> argTypes;
+  for (Argument *A : _depArgs) {
+    argTypes.emplace_back(A->getType());
+  }
+  return argTypes;
 }
 
 /**
@@ -218,28 +217,31 @@ SmallVector<Type*> ProgramSlice::getInputArgTypes() {
  * regards to which the slice was created.
  */
 Function *ProgramSlice::outline() {
-	Module *M = _initial->getParent()->getParent()->getParent();
-	LLVMContext &Ctx = M->getContext();
+  Module *M = _initial->getParent()->getParent()->getParent();
+  LLVMContext &Ctx = M->getContext();
 
-	SmallVector<Type*> inputTypes = getInputArgTypes();
-	FunctionType *FT = FunctionType::get(_initial->getType(), inputTypes, false);
-	std::string functionName = "_wyvern_slice_" + _initial->getParent()->getParent()->getName().str() + "_" + _initial->getName().str();
-	Function *F = Function::Create(FT, Function::ExternalLinkage, functionName, M);
+  SmallVector<Type *> inputTypes = getInputArgTypes();
+  FunctionType *FT = FunctionType::get(_initial->getType(), inputTypes, false);
+  std::string functionName =
+      "_wyvern_slice_" + _initial->getParent()->getParent()->getName().str() +
+      "_" + _initial->getName().str();
+  Function *F =
+      Function::Create(FT, Function::ExternalLinkage, functionName, M);
 
-	unsigned id = 0;
-	for (Argument &arg : F->args()) {
-		arg.setName(_depArgs[id]->getName());
-		_argMap.insert(std::make_pair(_depArgs[id++], &arg));
-	}
+  unsigned id = 0;
+  for (Argument &arg : F->args()) {
+    arg.setName(_depArgs[id]->getName());
+    _argMap.insert(std::make_pair(_depArgs[id++], &arg));
+  }
 
-	populateFunctionWithBBs(F);
-	populateBBsWithInsts(F);
-	addMissingTerminators(F);
-	reorganizeUses(F);
-	addReturnValue(F);
-	reorderBlocks(F);
+  populateFunctionWithBBs(F);
+  populateBBsWithInsts(F);
+  addMissingTerminators(F);
+  reorganizeUses(F);
+  addReturnValue(F);
+  reorderBlocks(F);
 
-	verifyFunction(*F);
+  verifyFunction(*F);
 
-	return F;
+  return F;
 }
