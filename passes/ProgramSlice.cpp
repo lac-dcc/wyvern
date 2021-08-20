@@ -1,5 +1,6 @@
 #include "ProgramSlice.h"
 
+#include "llvm/Support/Debug.h"
 #define DEBUG_TYPE "ProgamSlicing"
 
 using namespace llvm;
@@ -19,10 +20,13 @@ ProgramSlice::ProgramSlice(Instruction &I, Function &F) {
   std::set<Instruction *> instsInSlice;
   SmallVector<Argument *> depArgs;
 
+	LLVM_DEBUG(dbgs() << "Values in slice:\n");
   for (auto &val : valuesInSlice) {
     if (Argument *A = dyn_cast<Argument>(val)) {
+			LLVM_DEBUG(dbgs() << "Arg: " << *A << "\n";);
       depArgs.push_back(A);
     } else if (Instruction *I = dyn_cast<Instruction>(val)) {
+			LLVM_DEBUG(dbgs() << "Inst: " << *I << "\n";);
       instsInSlice.insert(I);
     }
   }
@@ -74,6 +78,7 @@ void ProgramSlice::populateFunctionWithBBs(Function *F) {
     if (_origToNewBBmap.count(I->getParent()) == 0) {
       insertNewBB(I->getParent(), F);
     }
+
     for (Use &U : I->operands()) {
       if (BasicBlock *origBB = dyn_cast<BasicBlock>(&U)) {
         if (_origToNewBBmap.count(origBB) == 0) {
@@ -81,6 +86,14 @@ void ProgramSlice::populateFunctionWithBBs(Function *F) {
         }
       }
     }
+
+		if (PHINode *PN = dyn_cast<PHINode>(I)) {
+			for (BasicBlock *BB : PN->blocks()) {
+				if (_origToNewBBmap.count(BB) == 0) {
+					insertNewBB(BB, F);
+				}
+			}
+		}
   }
 }
 
@@ -175,7 +188,6 @@ void ProgramSlice::reorderBlocks(Function *F) {
       realEntry = &BB;
     }
   }
-
   realEntry->moveBefore(&F->getEntryBlock());
 }
 
@@ -242,6 +254,9 @@ Function *ProgramSlice::outline() {
   reorderBlocks(F);
 
   verifyFunction(*F);
+
+	LLVM_DEBUG(dbgs() << "\n======== ORIGINAL FUNCTION ==========\n" << *_initial->getParent()->getParent());
+	LLVM_DEBUG(dbgs() << "\n======== SLICED FUNCTION ==========\n" << *F);
 
   return F;
 }
