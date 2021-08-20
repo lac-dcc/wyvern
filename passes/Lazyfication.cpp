@@ -17,14 +17,14 @@ Function *cloneCalleeFunction(Function &Callee, int index, Function &thunk, Poin
 
 	ValueToValueMapTy vMap;
 	int idx = -1;
-	for (auto &arg : newCallee->args()) {
-		++idx;
-		vMap[Callee.getArg(idx)] = &arg;
+	for (auto &arg : Callee.args()) {
+		idx++;
+		vMap[&arg] = newCallee->getArg(idx);
 		if (idx == index) {
-			arg.setName("thunkPtr");
+			newCallee->getArg(idx)->setName("_wyvern_thunkptr");
 			continue;
 		}
-		arg.setName(Callee.getArg(idx)->getName());
+		newCallee->getArg(idx)->setName(arg.getName());
 	}
 
 	SmallVector<ReturnInst*, 4> Returns;
@@ -35,7 +35,7 @@ Function *cloneCalleeFunction(Function &Callee, int index, Function &thunk, Poin
 		unsigned int opNo = Use.getOperandNo();
 		auto *UserI = dyn_cast<Instruction>(Use.getUser());
 		if (UserI) {
-			CallInst *thunkCall = CallInst::Create(thunk.getFunctionType(), &thunk, "thunkcall", UserI);
+			CallInst *thunkCall = CallInst::Create(thunk.getFunctionType(), fPtrArg, "thunkcall", UserI);
 			UserI->setOperand(opNo, thunkCall);
 		}
 	}
