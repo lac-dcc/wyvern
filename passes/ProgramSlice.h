@@ -16,6 +16,7 @@ namespace llvm {
 class ProgramSlice {
 public:
   ProgramSlice(Instruction &I, Function &F);
+  bool canOutline();
   SmallVector<Value *> getOrigFunctionArgs();
   Function *outline();
 

@@ -20,13 +20,15 @@ ProgramSlice::ProgramSlice(Instruction &I, Function &F) {
   std::set<Instruction *> instsInSlice;
   SmallVector<Argument *> depArgs;
 
-	LLVM_DEBUG(dbgs() << "Values in slice:\n");
+  LLVM_DEBUG(dbgs() << "Slicing function " << F.getName() << " in instruction "
+                    << I << "\n");
+  LLVM_DEBUG(dbgs() << "Values in slice:\n");
   for (auto &val : valuesInSlice) {
     if (Argument *A = dyn_cast<Argument>(val)) {
-			LLVM_DEBUG(dbgs() << "Arg: " << *A << "\n";);
+      LLVM_DEBUG(dbgs() << "Arg: " << *A << "\n";);
       depArgs.push_back(A);
     } else if (Instruction *I = dyn_cast<Instruction>(val)) {
-			LLVM_DEBUG(dbgs() << "Inst: " << *I << "\n";);
+      LLVM_DEBUG(dbgs() << "Inst: " << *I << "\n";);
       instsInSlice.insert(I);
     }
   }
@@ -35,6 +37,11 @@ ProgramSlice::ProgramSlice(Instruction &I, Function &F) {
   _depArgs = depArgs;
   _initial = &I;
   _parentFunction = &F;
+}
+
+bool ProgramSlice::canOutline() {
+  // we haven't implemented lazyfication for input argument-dependent slices yet
+  return (_depArgs.size() == 0);
 }
 
 /**
@@ -87,13 +94,13 @@ void ProgramSlice::populateFunctionWithBBs(Function *F) {
       }
     }
 
-		if (PHINode *PN = dyn_cast<PHINode>(I)) {
-			for (BasicBlock *BB : PN->blocks()) {
-				if (_origToNewBBmap.count(BB) == 0) {
-					insertNewBB(BB, F);
-				}
-			}
-		}
+    if (PHINode *PN = dyn_cast<PHINode>(I)) {
+      for (BasicBlock *BB : PN->blocks()) {
+        if (_origToNewBBmap.count(BB) == 0) {
+          insertNewBB(BB, F);
+        }
+      }
+    }
   }
 }
 
@@ -255,8 +262,9 @@ Function *ProgramSlice::outline() {
 
   verifyFunction(*F);
 
-	LLVM_DEBUG(dbgs() << "\n======== ORIGINAL FUNCTION ==========\n" << *_initial->getParent()->getParent());
-	LLVM_DEBUG(dbgs() << "\n======== SLICED FUNCTION ==========\n" << *F);
+  LLVM_DEBUG(dbgs() << "\n======== ORIGINAL FUNCTION ==========\n"
+                    << *_initial->getParent()->getParent());
+  LLVM_DEBUG(dbgs() << "\n======== SLICED FUNCTION ==========\n" << *F);
 
   return F;
 }

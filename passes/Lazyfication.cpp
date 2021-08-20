@@ -58,19 +58,20 @@ void WyvernLazyficationPass::lazifyCallsite(CallInst &CI, int index,
   }
 
   Function *caller = CI.getParent()->getParent();
-  Function *callee = CI.getCalledFunction();
   ProgramSlice slice = ProgramSlice(*lazyfiableArg, *caller);
+  if (!slice.canOutline()) {
+    errs() << "Cannot lazify argument. Slice is not outlineable!\n";
+    return;
+  }
+
   Function *thunk = slice.outline();
   FunctionType *FT = thunk->getFunctionType();
   SmallVector<Value *> args = slice.getOrigFunctionArgs();
+  Function *callee = CI.getCalledFunction();
 
-  errs() << "Lazifying: " << *lazyfiableArg << " in func " << caller->getName()
-         << " call to " << callee->getName() << "\n";
-
-  if (args.size() > 0) {
-    errs() << "Cannot lazify slices with input arguments yet!\n";
-    return;
-  }
+  LLVM_DEBUG(dbgs() << "Lazifying: " << *lazyfiableArg << " in func "
+                    << caller->getName() << " call to " << callee->getName()
+                    << "\n");
 
   PointerType *functionPtrType = FT->getPointerTo();
   Function *newCallee =
