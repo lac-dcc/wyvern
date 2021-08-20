@@ -10,13 +10,14 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include "ProgramDependencyGraph.hh"
+#include "../PDG/PDGAnalysis.h"
 
 
 namespace llvm {
 class ProgramSlice {
 	public:
-		ProgramSlice(Instruction &I, pdg::ProgramGraph *g);
+		ProgramSlice(Instruction &I, Function &F);
+		SmallVector<Value*> getOrigFunctionArgs();
 		Function *outline();
 	
 	private:
@@ -27,10 +28,14 @@ class ProgramSlice {
 		void populateFunctionWithBBs(Function *F);
 		void addMissingTerminators(Function *F);
 		void insertNewBB(BasicBlock *originalBB, Function *F);
+		SmallVector<Type*> getInputArgTypes();
 
 		Instruction* _initial;
 		Function* _parentFunction;
+		SmallVector<Argument*> _depArgs;
 		std::set<Instruction*> _instsInSlice;
+
+		std::map<Argument*, Argument*> _argMap;
 		std::map<BasicBlock*, BasicBlock*> _origToNewBBmap;
 		std::map<BasicBlock*, BasicBlock*> _newToOrigBBmap;
 		std::map<Instruction*, Instruction*> _Imap;

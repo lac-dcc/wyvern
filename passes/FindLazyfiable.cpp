@@ -32,8 +32,9 @@ void FindLazyfiableAnalysis::DFS(BasicBlock *first, BasicBlock *exit, std::set<B
 
 		if (cur == exit) {
 			auto pair = std::make_pair(cur->getParent(), index);
-			lazyPaths.insert(pair);
-			lazyFunctions.insert(cur->getParent());
+			_lazyPathsStats.insert(pair);
+			_lazyFunctionsStats.insert(cur->getParent());
+			_lazyfiablePaths.insert(std::make_pair(cur->getParent(), index));
 			return;
 		}
 
@@ -73,13 +74,7 @@ void FindLazyfiableAnalysis::findLazyfiablePaths(Function &F) {
 	}
 }
 
-bool FindLazyfiableAnalysis::isArgumentComplex(Instruction& I) {
-	pdg::ProgramGraph *g = getAnalysis<pdg::ProgramDependencyGraph>().getPDG();
-	
-	ProgramSlice slice = ProgramSlice(I, g);
-
-	Function *thunk = slice.outline();
-
+bool FindLazyfiableAnalysis::isArgumentComplex(Instruction& I) {	
 	return true;
 }
 
@@ -94,26 +89,81 @@ void FindLazyfiableAnalysis::analyzeCall(CallInst *CI) {
 			unsigned int index = CI->getArgOperandNo(&arg);
 			if (isArgumentComplex(*I)) {
 				auto pair = std::make_pair(Callee, index);
-				lazyfiableCallSites[pair] += 1;
+				_lazyfiableCallSitesStats[pair] += 1;
+				_lazyfiableCallSites.insert(std::make_pair(CI, index));
 			}	
 		}
 	}
 }
 
-bool FindLazyfiableAnalysis::runOnModule(Module &M) {
+void removeDummyFunctions(std::set<Function*> dummyFunctions) {
+	for (auto &F : dummyFunctions) {
+		for (auto User : F->users()) {
+			CallInst* dummyFunCall = (CallInst*) User;
+			dummyFunCall->eraseFromParent();
+		}
+		F->eraseFromParent();
+	}
+}
+
+FunctionCallee getDummyFunctionForType(Module &M, Type* Type) {
+	LLVMContext& Ctx = M.getContext();
+	std::string typeName;
+	raw_string_ostream typeNameOs(typeName);
+	Type->print(typeNameOs);
+	std::string dummyFunctionName = "dummy_fun" + typeNameOs.str();
+	FunctionCallee dummyFunction = M.getOrInsertFunction(dummyFunctionName, Type::getVoidTy(Ctx), Type);
+	return dummyFunction;
+}
+
+std::set<Function*> FindLazyfiableAnalysis::addMissingUses(Module &M, LLVMContext& Ctx) {
+	std::set<Function*> dummyFunctions;
 	for (Function &F : M) {
-		for (auto I = inst_begin(F), E = inst_end(F); I != E; ++I) {
-			if (CallInst *CI = dyn_cast<CallInst>(&*I)) {
-				analyzeCall(CI);
-			}
+		std::set<Value*> vArgs;
+		for (auto &arg : F.args()) {
+			if (Value* vArg = dyn_cast<Value>(&arg)) {
+				vArgs.insert(vArg);
+			}	
 		}
 
+		for (auto I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+			if (PHINode *PN = dyn_cast<PHINode>(&*I)) {
+				for (auto &value : PN->operands()) {
+					if (!vArgs.count(value)) {
+						continue;
+					}
+
+					FunctionCallee dummyFunction = getDummyFunctionForType(M, value->getType());
+					dummyFunctions.insert((Function *) dummyFunction.getCallee());
+					Value* args[] = { value };
+					BasicBlock* incBlock = PN->getIncomingBlock(value);
+					IRBuilder<> builder(incBlock, --incBlock->end());
+					builder.CreateCall(dummyFunction, args);
+				}
+			}
+		}
+	}
+	return dummyFunctions;
+}
+
+bool FindLazyfiableAnalysis::runOnModule(Module &M) {
+	std::set<Function*> dummyFunctions = addMissingUses(M, M.getContext());
+
+	for (Function &F : M) {
 		if (F.isDeclaration() || F.isVarArg()) {
 			continue;
 		}
 
 		findLazyfiablePaths(F);
+
+		for (auto I = inst_begin(F), E = inst_end(F); I != E; ++I) {
+			if (CallInst *CI = dyn_cast<CallInst>(&*I)) {
+				analyzeCall(CI);
+			}
+		}
 	}
+
+	removeDummyFunctions(dummyFunctions);
 
 	dump_results();
 
@@ -125,26 +175,25 @@ void FindLazyfiableAnalysis::dump_results() {
 	raw_fd_ostream outfile("lazyfiable.csv", ec);
 		
 	outfile << "function,lazyArg\n";
-	for (auto &entry : lazyPaths) {
+	for (auto &entry : _lazyPathsStats) {
 		outfile << entry.first->getName() << "," << entry.second << "\n";
 	}
 
 	outfile << "\n\nfunction,arg,callSites\n";
-	for (auto &entry : lazyfiableCallSites) {
+	for (auto &entry : _lazyfiableCallSitesStats) {
 		outfile << entry.first.first->getName() << "," << entry.first.second << "," << entry.second << "\n";
 	}
 
 	outfile << "\n\nfunctionsInBoth\n";
-	for (auto &entry : lazyfiableCallSites) {
-		if (lazyPaths.count(entry.first) > 0) {
+	for (auto &entry : _lazyfiableCallSitesStats) {
+		if (_lazyPathsStats.count(entry.first) > 0) {
 			outfile << entry.first.first->getName() << "," << entry.first.second << "\n";
 		}
 	}
 }
 
 void FindLazyfiableAnalysis::getAnalysisUsage(AnalysisUsage &AU) const {
-	AU.addRequired<pdg::ProgramDependencyGraph>();
 }
 
 char FindLazyfiableAnalysis::ID = 0;
-static RegisterPass<FindLazyfiableAnalysis> X("find-lazyfiable", "Find Lazyfiable function arguments.", false, false);
+static RegisterPass<FindLazyfiableAnalysis> X("find-lazyfiable", "Wyvern - Find Lazyfiable function arguments.", false, false);

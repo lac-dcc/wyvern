@@ -5,8 +5,7 @@
 #include <stdio.h>
 
 int getInput() {
-	int input;
-	fscanf(stdin, "%d", &input);
+	int input = 5;
 	return input;
 }
 
@@ -26,7 +25,7 @@ int bar(int x, int y) {
 		fprintf(stdout, "y = %d\n", y);
 	}
 
-	int a = getInput();
+	int a = 10 + getInput();
 	int b;
 
 	if (a > 10) {

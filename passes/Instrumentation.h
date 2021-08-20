@@ -8,6 +8,8 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
+#include "FindLazyfiable.h"
+
 
 namespace llvm {
 struct WyvernInstrumentationPass : public ModulePass {
@@ -19,7 +21,6 @@ struct WyvernInstrumentationPass : public ModulePass {
 	FunctionCallee dumpFun;
 	FunctionCallee logFun;
 
-	std::set<Function*> addMissingUses(Module &M, LLVMContext &Ctx);
 	void InstrumentExitPoints(Module &M, Value* num_funcs_arg);
 	void InstrumentExit(Function *F, long long func_id, AllocaInst *bits); 
 	void InstrumentFunction(Function *F, long long func_id); 

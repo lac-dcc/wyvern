@@ -4,47 +4,57 @@
 
 using namespace llvm;
 
-ProgramSlice::ProgramSlice(Instruction &I, pdg::ProgramGraph *g) {
+/**
+ * Creates a representation of a backwards slice of function @param F in
+ * regards to instruction @param I.
+ *
+ */
+ProgramSlice::ProgramSlice(Instruction &I, Function &F) {
+	assert(I.getParent()->getParent() == &F && "Slicing instruction from different function!");
+	
+	phoenix::ProgramDependenceGraph PDG;
+	PDG.compute_dependences(&F);
+	std::set<Value*> valuesInSlice = PDG.get_dependences_for(&I);
 	std::set<Instruction*> instsInSlice;
+	SmallVector<Argument*> depArgs;
 
-	std::stack<pdg::Node *> toVisit;
-	pdg::Node* initial = g->getNode((Value&) I);
-
-	toVisit.push(initial);
-
-	while (!toVisit.empty()) {
-		pdg::Node* cur = toVisit.top();
-		toVisit.pop();
-		instsInSlice.insert((Instruction*) cur->getValue());
-		for (pdg::Node* node : cur->getInNeighbors()) {
-			if (node->getValue() == nullptr) {
-				continue;
-			}
-
-			if (!isa<Instruction>(node->getValue())) {
-				continue;
-			}
-
-			Instruction *currentInst = (Instruction*) node->getValue();
-			//we do not want interprocedural slices
-
-			if (currentInst->getParent()->getParent() != I.getParent()->getParent()) {
-					continue;
-			}
-
-			if (instsInSlice.count(currentInst)) {
-				continue;
-			}
-
-			toVisit.push(node);
+	for (auto &val : valuesInSlice) {
+		if (Argument *A = dyn_cast<Argument>(val)) {
+			depArgs.push_back(A);
+		}
+		else if (Instruction *I = dyn_cast<Instruction>(val)) {
+			instsInSlice.insert(I);
 		}
 	}
 
 	_instsInSlice = instsInSlice;
+	_depArgs = depArgs;
 	_initial = &I;
-	_parentFunction = I.getParent()->getParent();
+	_parentFunction = &F;
 }
 
+/**
+ * Returns the arguments from the original function which
+ * are part of the slice. Is used externally to match formal
+ * parameters with actual parameters when generating calls to
+ * outlined slice functions.
+ *
+ */
+SmallVector<Value*> ProgramSlice::getOrigFunctionArgs() {
+	SmallVector<Value*> args;
+	for (auto &arg : _depArgs) {
+		args.push_back(cast<Value>(arg));
+	}
+	return args;
+}
+
+
+/**
+ * Inserts a new BasicBlock in Function @param F, corresponding
+ * to the @param originalBB from the original function being
+ * sliced.
+ *
+ */
 void ProgramSlice::insertNewBB(BasicBlock *originalBB, Function *F) {
 	auto originalName = originalBB->getName();
 	std::string newBBName = "sliceclone_" + originalName.str();
@@ -53,10 +63,16 @@ void ProgramSlice::insertNewBB(BasicBlock *originalBB, Function *F) {
 	_newToOrigBBmap.insert(std::make_pair(newBB, originalBB));
 }
 
+
+/**
+ * Populates function @param F with BasicBlocks, corresponding
+ * to the BBs in the original function being sliced which
+ * contained instructions included in the slice.
+ *
+ */
 void ProgramSlice::populateFunctionWithBBs(Function *F) {
 	for (Instruction *I : _instsInSlice) {
 		if (_origToNewBBmap.count(I->getParent()) == 0) {
-			errs() << "Adding BB for: " << I->getParent()->getName() << "\n";
 			insertNewBB(I->getParent(), F);
 		}
 		for (Use &U : I->operands()) {
@@ -69,6 +85,12 @@ void ProgramSlice::populateFunctionWithBBs(Function *F) {
 	}
 }
 
+
+/**
+ * Adds slice instructions to function @param F, corresponding
+ * to instructions in the original function.
+ *
+ */
 void ProgramSlice::populateBBsWithInsts(Function *F) {
 	for (BasicBlock &BB : *_parentFunction) {
 		for (Instruction &origInst : BB) {
@@ -82,6 +104,12 @@ void ProgramSlice::populateBBsWithInsts(Function *F) {
 	}
 }
 
+/**
+ * Fixes the instruction/argument/BB uses in new function @param F,
+ * to use their corresponding versions in the sliced function, rather
+ * than the originals from whom they were cloned.
+ *
+ */
 void ProgramSlice::reorganizeUses(Function *F) {
 	for (auto &pair : _origToNewBBmap) {
 		BasicBlock *originalBB = pair.first;
@@ -107,9 +135,25 @@ void ProgramSlice::reorganizeUses(Function *F) {
 				return UserI && UserI->getParent()->getParent() == F;
 			});
 		}
+
+		for (auto &pair : _argMap) {
+			Argument *origArg = pair.first;
+			Argument *newArg = pair.second;
+
+			origArg->replaceUsesWithIf(newArg, [F](Use &U) {
+				auto *UserI = dyn_cast<Instruction>(U.getUser());
+				return UserI && UserI->getParent()->getParent() == F;
+			});
+		}
 	}
 }
 
+/**
+ * Adds terminating branches to BasicBlocks in function @param F,
+ * for BBs whose branches were not included in the slice but
+ * which are necessary to replicate the control flow of the
+ * original function.
+ */
 void ProgramSlice::addMissingTerminators(Function *F) {
 	for (BasicBlock &BB : *F) {
 		if (BB.getTerminator() == nullptr) {
@@ -121,6 +165,11 @@ void ProgramSlice::addMissingTerminators(Function *F) {
 	}
 }
 
+/**
+ * Reorders basic blocks in the new function @param F, to make
+ * sure that the sliced function's entry block (the only one
+ * with no predecessors) is first in the layout.
+ */
 void ProgramSlice::reorderBlocks(Function *F) {
 	BasicBlock *realEntry = nullptr;
 	for (BasicBlock &BB : *F) {
@@ -132,6 +181,11 @@ void ProgramSlice::reorderBlocks(Function *F) {
 	realEntry->moveBefore(&F->getEntryBlock());
 }
 
+/**
+ * Adds a return instruction to function @param F, which returns
+ * the value that is computed by the sliced function.
+ *
+ */
 void ProgramSlice::addReturnValue(Function *F) {
 	BasicBlock *exit = nullptr;
 	for (BasicBlock &BB : *F) {
@@ -144,13 +198,39 @@ void ProgramSlice::addReturnValue(Function *F) {
 	ReturnInst *new_ret = ReturnInst::Create(F->getParent()->getContext(), _Imap[_initial], exit);
 }
 
+/**
+ * Returns the types of the original function's formal parameters
+ * _which are included in the slice_, so the sliced function's
+ * signature can be created to match it.
+ *
+ */
+SmallVector<Type*> ProgramSlice::getInputArgTypes() {
+	SmallVector<Type*> argTypes;
+	for(Argument *A : _depArgs) {
+		argTypes.emplace_back(A->getType());
+	}
+	return argTypes;
+}
+
+/**
+ * Outlines the given slice into a standalone Function, which
+ * encapsulates the computation of the original value in
+ * regards to which the slice was created.
+ */
 Function *ProgramSlice::outline() {
 	Module *M = _initial->getParent()->getParent()->getParent();
 	LLVMContext &Ctx = M->getContext();
 
-	FunctionType *FT = FunctionType::get(_initial->getType(), false);
+	SmallVector<Type*> inputTypes = getInputArgTypes();
+	FunctionType *FT = FunctionType::get(_initial->getType(), inputTypes, false);
 	std::string functionName = "_wyvern_slice_" + _initial->getParent()->getParent()->getName().str() + "_" + _initial->getName().str();
 	Function *F = Function::Create(FT, Function::ExternalLinkage, functionName, M);
+
+	unsigned id = 0;
+	for (Argument &arg : F->args()) {
+		arg.setName(_depArgs[id]->getName());
+		_argMap.insert(std::make_pair(_depArgs[id++], &arg));
+	}
 
 	populateFunctionWithBBs(F);
 	populateBBsWithInsts(F);

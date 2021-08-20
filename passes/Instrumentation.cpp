@@ -1,4 +1,3 @@
-#include "FindLazyfiable.h"
 #include "Instrumentation.h"
 
 using namespace llvm;
@@ -72,56 +71,6 @@ void WyvernInstrumentationPass::InstrumentFunction(Function *F, long long func_i
 	}	
 }
 
-void removeDummyFunctions(std::set<Function*> dummyFunctions) {
-	for (auto &F : dummyFunctions) {
-		for (auto User : F->users()) {
-			CallInst* dummyFunCall = (CallInst*) User;
-			dummyFunCall->eraseFromParent();
-		}
-		F->eraseFromParent();
-	}
-}
-
-FunctionCallee getDummyFunctionForType(Module &M, Type* Type) {
-	LLVMContext& Ctx = M.getContext();
-	std::string typeName;
-	raw_string_ostream typeNameOs(typeName);
-	Type->print(typeNameOs);
-	std::string dummyFunctionName = "dummy_fun" + typeNameOs.str();
-	FunctionCallee dummyFunction = M.getOrInsertFunction(dummyFunctionName, Type::getVoidTy(Ctx), Type);
-	return dummyFunction;
-}
-
-std::set<Function*> WyvernInstrumentationPass::addMissingUses(Module &M, LLVMContext& Ctx) {
-	std::set<Function*> dummyFunctions;
-	for (Function &F : M) {
-		std::set<Value*> vArgs;
-		for (auto &arg : F.args()) {
-			if (Value* vArg = dyn_cast<Value>(&arg)) {
-				vArgs.insert(vArg);
-			}	
-		}
-
-		for (auto I = inst_begin(F), E = inst_end(F); I != E; ++I) {
-			if (PHINode *PN = dyn_cast<PHINode>(&*I)) {
-				for (auto &value : PN->operands()) {
-					if (!vArgs.count(value)) {
-						continue;
-					}
-
-					FunctionCallee dummyFunction = getDummyFunctionForType(M, value->getType());
-					dummyFunctions.insert((Function *) dummyFunction.getCallee());
-					Value* args[] = { value };
-					BasicBlock* incBlock = PN->getIncomingBlock(value);
-					IRBuilder<> builder(incBlock, --incBlock->end());
-					builder.CreateCall(dummyFunction, args);
-				}
-			}
-		}
-	}
-	return dummyFunctions;
-}
-
 void WyvernInstrumentationPass::InstrumentExitPoints(Module &M, Value* num_funcs_arg) {
 	LLVMContext& Ctx = M.getContext();
 	Value* args[] = { num_funcs_arg };
@@ -155,8 +104,6 @@ bool WyvernInstrumentationPass::runOnModule(Module &M) {
 	dumpFun = M.getOrInsertFunction("_wyinstr_dump", Type::getVoidTy(Ctx), Type::getInt32Ty(Ctx));
 	logFun = M.getOrInsertFunction("_wyinstr_log_func", Type::getVoidTy(Ctx), Type::getInt64Ty(Ctx)->getPointerTo(), Type::getInt32Ty(Ctx), Type::getInt64Ty(Ctx));
 
-	std::set<Function*> dummyFunctions = addMissingUses(M, Ctx);
-
 	FindLazyfiableAnalysis &FLA = getAnalysis<FindLazyfiableAnalysis>();
 
 	std::error_code ec;
@@ -177,8 +124,8 @@ bool WyvernInstrumentationPass::runOnModule(Module &M) {
 	}
 			
 	else {
-		num_instrumented_funcs = FLA.lazyFunctions.size();
-		for (auto const &F : FLA.lazyFunctions) {
+		num_instrumented_funcs = FLA.getLazyFunctionStats().size();
+		for (auto const &F : FLA.getLazyFunctionStats()) {
 			outfile << F->getName() << "," << func_id << "," << F->size() << "\n";
 			InstrumentFunction(F, func_id++);
 		}
@@ -186,8 +133,6 @@ bool WyvernInstrumentationPass::runOnModule(Module &M) {
 
 	ConstantInt* num_funcs_arg = ConstantInt::get(Ctx, llvm::APInt(32, num_instrumented_funcs, true));
 	InstrumentExitPoints(M, num_funcs_arg);
-
-	removeDummyFunctions(dummyFunctions);
 
 	return true;
 }
@@ -197,4 +142,4 @@ void WyvernInstrumentationPass::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 
 char WyvernInstrumentationPass::ID = 0;
-static RegisterPass<WyvernInstrumentationPass> X("instrument", "Instrument functions to track argument usage.", true, true);
+static RegisterPass<WyvernInstrumentationPass> X("wyinstr-instrument", "Wyvern - Instrument functions to track argument usage.", true, true);

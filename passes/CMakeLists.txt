@@ -1,9 +1,8 @@
-include_directories(../pdg/include)
-
 add_library(Wyvern MODULE
 	FindLazyfiable.cpp
 	Instrumentation.cpp
 	ProgramSlice.cpp
+	Lazyfication.cpp
 )
 
 target_compile_features(Wyvern PRIVATE cxx_range_for cxx_auto_type)
