@@ -40,6 +40,13 @@ ProgramSlice::ProgramSlice(Instruction &I, Function &F) {
 }
 
 bool ProgramSlice::canOutline() {
+  for (Instruction *I : _instsInSlice) {
+    if (I->mayHaveSideEffects()) {
+      LLVM_DEBUG(dbgs() << "Cannot outline because inst may have side effects: "
+                        << *I << "\n");
+      return false;
+    }
+  }
   // we haven't implemented lazyfication for input argument-dependent slices yet
   return (_depArgs.size() == 0);
 }
