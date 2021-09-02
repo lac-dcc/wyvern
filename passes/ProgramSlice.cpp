@@ -212,16 +212,11 @@ void ProgramSlice::reorderBlocks(Function *F) {
  * the value that is computed by the sliced function.
  *
  */
-void ProgramSlice::addReturnValue(Function *F) {
-  BasicBlock *exit = nullptr;
-  for (BasicBlock &BB : *F) {
-    if (ReturnInst *RI = dyn_cast<ReturnInst>(BB.getTerminator())) {
-      exit = &BB;
-    }
-  }
+ReturnInst *ProgramSlice::addReturnValue(Function *F) {
+  BasicBlock *exit = _Imap[_initial]->getParent();
 
   exit->getTerminator()->eraseFromParent();
-  ReturnInst *new_ret =
+  return
       ReturnInst::Create(F->getParent()->getContext(), _Imap[_initial], exit);
 }
 
