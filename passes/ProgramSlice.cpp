@@ -1,3 +1,5 @@
+#define DEBUG_TYPE "ProgamSlicing"
+
 #include "ProgramSlice.h"
 
 #include "llvm/Support/Debug.h"

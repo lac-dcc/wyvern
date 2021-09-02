@@ -1,3 +1,5 @@
+#define DEBUG_TYPE "WyvernLazyficationPass"
+
 #include "Lazyfication.h"
 
 #define DEBUG_TYPE "WyvernLazyficationPass"

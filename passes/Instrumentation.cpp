@@ -1,3 +1,5 @@
+#define DEBUG_TYPE "WyvernInstrumentationPass"
+
 #include "Instrumentation.h"
 
 using namespace llvm;

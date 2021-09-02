@@ -1,6 +1,6 @@
-#include "FindLazyfiable.h"
-
 #define DEBUG_TYPE "FindLazyfiablePass"
+
+#include "FindLazyfiable.h"
 
 using namespace llvm;
 
