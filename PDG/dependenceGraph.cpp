@@ -43,6 +43,10 @@ namespace phoenix {
   TAB + TAB + id \
   + " [label = " + QUOTE(label) + "]"
 
+#define COLORED_NODE(id, label) \
+  TAB + TAB + id \
+  + " [label = " + QUOTE(label) + " color = \"red\" ]"
+
 #define ID(node) \
   std::to_string(node->id) 
 
@@ -108,7 +112,7 @@ std::set<DependenceEdge*> DependenceGraph::get_edges(){
   return s;
 }
 
-std::string DependenceGraph::declare_nodes(){
+std::string DependenceGraph::declare_nodes(std::set<Instruction*> &colored){
   std::string str;
   auto m = get_nodes();
 
@@ -123,7 +127,12 @@ std::string DependenceGraph::declare_nodes(){
     for (auto *node : s){
       std::string id = ID(node);
       std::string label = node->label();
-      str += NODE(id, label) + "\n";
+      if (isa<Instruction>(node->node) && (colored.count((Instruction*) node->node))) {
+          str += COLORED_NODE(id, label) + "\n";
+      }
+      else {
+        str += NODE(id, label) + "\n";
+      }
     }
 
     bool first = true;
@@ -170,11 +179,11 @@ std::string DependenceGraph::declare_edges(){
   return str;
 }
 
-void DependenceGraph::to_dot(){
+void DependenceGraph::to_dot(std::set<Instruction*> &colored){
   std::string str;
 
   str += DIGRAPH_BEGIN;
-  str += declare_nodes();
+  str += declare_nodes(colored);
   str += declare_edges();
   str += DIGRAPH_END;
   errs() << str << "\n";

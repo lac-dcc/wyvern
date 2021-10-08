@@ -20,10 +20,15 @@ using namespace llvm;
 
 namespace phoenix {
 
-enum DependenceType {
-  DT_Data,
-  DT_Control,
+enum DependenceType : int32_t {
+  DT_Data = 0x1,
+  DT_Control = 0x2,
+  DT_Either = 0x4,
 };
+
+inline DependenceType operator&(DependenceType a, DependenceType b) {
+  return static_cast<DependenceType>(static_cast<int32_t>(a) & static_cast<int32_t>(b));
+}
 
 struct DependenceNode{
 
@@ -98,13 +103,13 @@ private:
   std::map<BasicBlock*, DNSet> get_nodes();
   std::set<DependenceEdge*> get_edges();
 
-  std::string declare_nodes();
+  std::string declare_nodes(std::set<Instruction*> &colored);
   std::string declare_edges();
 
 public:
   void add_edge(Value *u, Value *v, DependenceType type);
 
-  void to_dot();
+  void to_dot(std::set<Instruction*> &colored);
 
   // friend llvm::raw_ostream& operator<<(llvm::raw_ostream& os, DependenceGraph &dg){
   //   return os;

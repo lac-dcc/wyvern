@@ -17,7 +17,9 @@ private:
   void compute_data_dependences(Function *F);
 
 public:
-  std::set<Value *> get_dependences_for(Instruction *start);
+  std::set<Value *> get_dependences_for(Instruction *start, DependenceType type);
+  std::set<Value *> get_data_dependences_for(Instruction *start);
+  std::set<Value *> get_control_dependences_for(Instruction *start);
   void compute_dependences(Function *F);
 
   DependenceGraph* get_dependence_graph();

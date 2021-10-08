@@ -50,7 +50,7 @@ Value *ProgramDependenceGraph::get_predicate(PostDominatorTree *PDT,
   if (br->isUnconditional() || PDT->properlyDominates(Y, X))
     return old_pred;
 
-  // return br->getCondition();
+  //return br->getCondition();
   return br;
 }
 
@@ -61,9 +61,7 @@ void ProgramDependenceGraph::create_control_edges(BasicBlock *Y, Value *pred) {
 
   for (Value &y : *Y) {
     if (Instruction *I = dyn_cast<Instruction>(&y)) {
-      //if (I->isTerminator()) {
         DG->add_edge(&y, pred, DT_Control);
-      //}
     }
   }
 }
@@ -81,7 +79,7 @@ void ProgramDependenceGraph::compute_control_dependences(DominatorTree *DT,
   return;
 }
 
-std::set<Value *> ProgramDependenceGraph::get_dependences_for(Instruction *start) {
+std::set<Value *> ProgramDependenceGraph::get_dependences_for(Instruction *start, DependenceType type = DT_Either) {
   std::set<Value *> s;
   std::queue<Value *> q;
 
@@ -102,12 +100,25 @@ std::set<Value *> ProgramDependenceGraph::get_dependences_for(Instruction *start
       if (s.find(v) != s.end())
         continue;
 
+      int32_t result = edge->type & type;
+      if (!(edge->type & type)) {   
+        continue;
+      }
+
       s.insert(v);
       q.push(v);
     }
   }
 
   return s;
+}
+
+std::set<Value *> ProgramDependenceGraph::get_data_dependences_for(Instruction *start) {
+  return get_dependences_for(start, DT_Data);
+}
+
+std::set<Value *> ProgramDependenceGraph::get_control_dependences_for(Instruction *start) {
+  return get_dependences_for(start, DT_Control);
 }
 
 void ProgramDependenceGraph::create_data_edges(Value *start) {
