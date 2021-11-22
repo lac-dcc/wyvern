@@ -1,6 +1,7 @@
 // This simple test contains two functions which have paths where at least
 // one of their arguments is not used, and should thus be candidates for
-// lazyfication.
+// lazyfication. It exits through the exit() system call rather than returning
+// from main.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,30 +9,38 @@
 int maybe_use_arg(int w, int z);
 
 int optimizable(int x, int y) {
-	int maybe = x + y;
-	int pointless = x * y;
+	int maybe = 10 * y;
 
-	if (x > 10) {
-		if (y < 10) {
-			pointless = 10 * y;
+	if (x + y > 10) {
+		if (y % x == 2) {
+			switch (x) {
+				case 0: {
+					maybe = x * y;
+					break;
+				}
+				case 1: {
+					maybe = y*y*5;
+					break;
+				}
+				case 2: {
+					maybe = x + y + y * y;
+					break;
+				}
+				default: {
+					maybe = x + x * x + y;
+					break;
+				}
+			}
 		}
-		else {
-			pointless = 10 * x;
-		}
-		maybe = x * x + y;
 	}
 
 	else {
-		maybe = x + x * y;
-		if (y > 10) {
-			pointless = 10 + y;
-		}
-		else {
-			pointless = 10 + x;
+		maybe = y * x / 2;
+		if (maybe % 3 == 0) {
+			maybe = y * y * x;
 		}
 	}
 
-	fprintf(stdout, "pointless = %d\n", pointless);
 	return maybe_use_arg(x, maybe);
 }
 

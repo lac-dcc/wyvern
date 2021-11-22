@@ -7,31 +7,23 @@
 
 int maybe_use_arg(int w, int z);
 
-int optimizable(int x, int y) {
-	int maybe = x + y;
-	int pointless = x * y;
+int dummy(void) {
+	return 10;
+}
 
-	if (x > 10) {
-		if (y < 10) {
-			pointless = 10 * y;
-		}
-		else {
-			pointless = 10 * x;
-		}
-		maybe = x * x + y;
+int optimizable(int x, int y) {
+	int maybe = dummy() + 1;
+	int pointless;
+
+	if (dummy() > 10) {
+		pointless = 5;
 	}
 
 	else {
-		maybe = x + x * y;
-		if (y > 10) {
-			pointless = 10 + y;
-		}
-		else {
-			pointless = 10 + x;
-		}
+		pointless = 10;
 	}
 
-	fprintf(stdout, "pointless = %d\n", pointless);
+	fprintf(stdout, "Pointless = %d\n", pointless);
 	return maybe_use_arg(x, maybe);
 }
 

@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-int bar(int x, int y) {
+int optimizable(int x, int y) {
 	if (x >= 10) {
 		fprintf(stdout, "y = %d\n", y);
 	}
@@ -14,7 +14,7 @@ int bar(int x, int y) {
 	return 0;
 }
 
-int foo(int x, int y, int z, int i) {
+int maybe_use_z(int x, int y, int z, int i) {
 	if (x > 0) {
 		fprintf(stdout, "num = %d\n", y * 2 + z - i);
 		return 1;
@@ -30,10 +30,10 @@ void dummyExit() {
 }
 
 int main() {
-	bar(10, 5);
-	bar(1, 5);
-	foo(10, 11, 12, 13);
-	foo(-1, 11, 12, 13);
+	optimizable(10, 5);
+	optimizable(1, 5);
+	maybe_use_z(10, 11, 12, 13);
+	maybe_use_z(-1, 11, 12, 13);
 	dummyExit();
 	return 0;
 }

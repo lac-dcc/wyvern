@@ -5,34 +5,37 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+struct test {
+	int x;
+};
+
 int maybe_use_arg(int w, int z);
 
-int optimizable(int x, int y) {
-	int maybe = x + y;
-	int pointless = x * y;
+int dummy(void) {
+	return 10;
+}
 
-	if (x > 10) {
-		if (y < 10) {
-			pointless = 10 * y;
+int optimizable(struct test t) {
+	int pointless = 0;
+	int x = dummy();
+	int y = dummy();
+
+	if (x + y) {
+		if (x - y) {
+			if (x * y) {
+				int maybe = t.x;
+				maybe_use_arg(x, maybe / 2.0);
+			} else {
+				pointless = x * y;
+			}
+		} else {
+			pointless = x - y;
 		}
-		else {
-			pointless = 10 * x;
-		}
-		maybe = x * x + y;
+	} else {
+		pointless = y - x;
 	}
-
-	else {
-		maybe = x + x * y;
-		if (y > 10) {
-			pointless = 10 + y;
-		}
-		else {
-			pointless = 10 + x;
-		}
-	}
-
-	fprintf(stdout, "pointless = %d\n", pointless);
-	return maybe_use_arg(x, maybe);
+	
+	return pointless;
 }
 
 int maybe_use_arg(int always_used, int maybe_used) {
@@ -51,5 +54,7 @@ int main(int argc, char *argv[]) {
 		fprintf(stderr, "Usage: %s <value1> <value2>\n", argv[0]);
 	}
 
-	return optimizable(atoi(argv[1]), atoi(argv[2]));
+	struct test t;
+	t.x = dummy();
+	return optimizable(t);
 }

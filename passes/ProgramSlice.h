@@ -1,43 +1,48 @@
 #include <set>
-#include <stack>
-#include <utility>
 
 #include "llvm/IR/Function.h"
-#include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/InstIterator.h"
-#include "llvm/IR/Instructions.h"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/Verifier.h"
-#include "llvm/Support/raw_ostream.h"
-
-#include "../PDG/PDGAnalysis.h"
+#include "llvm/IR/Instructions.h" 
+#include "llvm/IR/Dominators.h"
 
 namespace llvm {
 class ProgramSlice {
 public:
-  ProgramSlice(Instruction &I, Function &F);
+  ProgramSlice(Instruction &I, Function &F, CallInst &CallSite);
   bool canOutline();
-  SmallVector<Value *> getOrigFunctionArgs();
+  bool verify();
+  SmallVector<const Value *> getOrigFunctionArgs();
   Function *outline();
+  Function *memoizedOutline();
+  unsigned int size();
 
 private:
+  
+  void printFunctions(Function *F);
   void reorderBlocks(Function *F);
-  void addReturnValue(Function *F);
+  void rerouteBranches(Function *F);
+  ReturnInst *addReturnValue(Function *F);
   void reorganizeUses(Function *F);
   void populateBBsWithInsts(Function *F);
   void populateFunctionWithBBs(Function *F);
   void addMissingTerminators(Function *F);
-  void insertNewBB(BasicBlock *originalBB, Function *F);
+  void addMemoizationCode(Function *F, ReturnInst *new_ret);
+  void insertNewBB(const BasicBlock *originalBB, Function *F);
+  void printSlice();
+  void computeAttractorBlocks();
+  void addDomBranches(DomTreeNode *cur, DomTreeNode *parent, std::set<DomTreeNode*> &visited);
   SmallVector<Type *> getInputArgTypes();
 
   Instruction *_initial;
   Function *_parentFunction;
   SmallVector<Argument *> _depArgs;
-  std::set<Instruction *> _instsInSlice;
+  std::set<const Instruction *> _instsInSlice;
+  std::set<const BasicBlock *> _BBsInSlice;
+  CallInst *_CallSite;
 
+  std::map<const BasicBlock*, const BasicBlock*> _attractors;
   std::map<Argument *, Argument *> _argMap;
-  std::map<BasicBlock *, BasicBlock *> _origToNewBBmap;
-  std::map<BasicBlock *, BasicBlock *> _newToOrigBBmap;
+  std::map<const BasicBlock *, BasicBlock *> _origToNewBBmap;
+  std::map<BasicBlock *, const BasicBlock *> _newToOrigBBmap;
   std::map<Instruction *, Instruction *> _Imap;
 };
 } // namespace llvm
