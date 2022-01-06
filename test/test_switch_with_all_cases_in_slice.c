@@ -10,7 +10,6 @@ int maybe_use_arg(int w, int z);
 
 int optimizable(int x, int y) {
 	int maybe = 10 * y;
-	int pointless = 10 * x;
 
 	if (x + y > 10) {
 		if (y % x == 2) {
@@ -24,11 +23,11 @@ int optimizable(int x, int y) {
 					break;
 				}
 				case 2: {
-					pointless = x + y + y * y;
+					maybe = x + y + y * y;
 					break;
 				}
 				default: {
-					pointless = x + x * x + y;
+					maybe = x + x * x + y;
 					break;
 				}
 			}
@@ -59,6 +58,7 @@ int maybe_use_arg(int always_used, int maybe_used) {
 int main(int argc, char *argv[]) {
 	if (argc != 3) {
 		fprintf(stderr, "Usage: %s <value1> <value2>\n", argv[0]);
+		return 0;
 	}
 
 	return optimizable(atoi(argv[1]), atoi(argv[2]));
