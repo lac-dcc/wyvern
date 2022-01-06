@@ -5,18 +5,19 @@
 #include "llvm/IR/Dominators.h"
 
 namespace llvm {
+  
 class ProgramSlice {
 public:
   ProgramSlice(Instruction &I, Function &F, CallInst &CallSite);
   bool canOutline();
   bool verify();
-  SmallVector<const Value *> getOrigFunctionArgs();
-  Function *outline();
+  SmallVector<Value *> getOrigFunctionArgs();
+  std::tuple<Function*, PointerType*> outline();
   Function *memoizedOutline();
   unsigned int size();
 
 private:
-  
+  void insertLoadForThunkParams(Function *F);
   void printFunctions(Function *F);
   void reorderBlocks(Function *F);
   void rerouteBranches(Function *F);
@@ -40,7 +41,7 @@ private:
   CallInst *_CallSite;
 
   std::map<const BasicBlock*, const BasicBlock*> _attractors;
-  std::map<Argument *, Argument *> _argMap;
+  std::map<Argument*, Value*> _argMap;
   std::map<const BasicBlock *, BasicBlock *> _origToNewBBmap;
   std::map<BasicBlock *, const BasicBlock *> _newToOrigBBmap;
   std::map<Instruction *, Instruction *> _Imap;

@@ -23,8 +23,6 @@
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/Dominators.h"
 
-//#include "../PDG/PDGAnalysis.h"
-
 STATISTIC(InvalidSlices,
           "Slices which contain branches with no post dominator.");
 
@@ -142,8 +140,6 @@ ProgramSlice::ProgramSlice(Instruction &Initial, Function &F,
   assert(Initial.getParent()->getParent() == &F &&
          "Slicing instruction from different function!");
 
-  //phoenix::ProgramDependenceGraph PDG;
-  //PDG.compute_dependences(&F);
   std::unordered_map<const BasicBlock *, SmallVector<const Value *>> gates =
       computeGates(F);
   auto [BBsInSlice, valuesInSlice] = get_data_dependences_for(Initial, gates);
@@ -294,6 +290,12 @@ void ProgramSlice::rerouteBranches(Function *F) {
   // slice, BB1 IDom BB2, and BB1 has no terminator, create branch BB1->BB2
   addDomBranches(init, parent, visited);
 
+  // Save list of PHI nodes to update. Old blocks should be replaced by
+  // new blocks as predecessors in merging values. We store PHIs to update
+  // at the end of the function to avoid invalidating iterators if we
+  // modify in-place.
+  std::map<PHINode*, std::pair<BasicBlock*, BasicBlock*>> PHIsToUpdate;
+
   // Now iterate over every block in the slice...
   for (BasicBlock &BB : *F) {
     // If block still has no terminator, create an unconditional branch routing
@@ -306,6 +308,28 @@ void ProgramSlice::rerouteBranches(Function *F) {
           BasicBlock *newTarget = _origToNewBBmap[_attractors[suc]];
           if (newTarget != nullptr) {
             BranchInst::Create(newTarget, &BB);
+            // If new successor has any PHINodes that merged a path from a block
+            // that was dominated by this block, update its incoming block to
+            // be this instead.
+            for (Instruction &I : *newTarget) {
+              if (!isa<PHINode>(I)) {
+                continue;
+              }
+              PHINode *phi = cast<PHINode>(&I);
+              for (BasicBlock *newTargetPHIBB : phi->blocks()) {
+                if(newTargetPHIBB->getParent() != F) {
+                  DomTreeNode *OrigBB = DT.getNode(newTargetPHIBB);
+                  DomTreeNode *Cand = OrigBB->getIDom();
+                  while (Cand != nullptr) {
+                    if (Cand->getBlock() == parentBB) {
+                      break;
+                    }
+                    Cand = Cand->getIDom();
+                  }
+                  if (Cand) { phi->replaceIncomingBlockWith(newTargetPHIBB, &BB); }
+                }
+              }
+            }
             break;
           }
         }
@@ -315,7 +339,7 @@ void ProgramSlice::rerouteBranches(Function *F) {
       Instruction *term = BB.getTerminator();
       if (BranchInst *BI = dyn_cast<BranchInst>(term)) {
         for (unsigned int idx = 0; idx < BI->getNumSuccessors(); ++idx) {
-          const BasicBlock *suc = BI->getSuccessor(idx);
+          BasicBlock *suc = BI->getSuccessor(idx);
           if (suc->getParent() == F) {
             continue;
           }
@@ -323,16 +347,16 @@ void ProgramSlice::rerouteBranches(Function *F) {
           BasicBlock *newSucc = _origToNewBBmap[attractor];
           BI->setSuccessor(idx, newSucc);
           for (Instruction &I : *newSucc) {
-            if (!isa<PHINode>(&I)) {
+            if (!isa<PHINode>(I)) {
               continue;
             }
-            PHINode *PN = dyn_cast<PHINode>(&I);
-            PN->replaceIncomingBlockWith(suc, &BB);
+            PHINode *phi = cast<PHINode>(&I);
+            phi->replaceIncomingBlockWith(suc, &BB);
           }
         }
       } else if (SwitchInst *SI = dyn_cast<SwitchInst>(term)) {
         for (unsigned int idx = 0; idx < SI->getNumSuccessors(); ++idx) {
-          const BasicBlock *suc = SI->getSuccessor(idx);
+          BasicBlock *suc = SI->getSuccessor(idx);
           if (suc->getParent() == F) {
             continue;
           }
@@ -340,11 +364,11 @@ void ProgramSlice::rerouteBranches(Function *F) {
           BasicBlock *newSucc = _origToNewBBmap[attractor];
           SI->setSuccessor(idx, newSucc);
           for (Instruction &I : *newSucc) {
-            if (!isa<PHINode>(&I)) {
+            if (!isa<PHINode>(I)) {
               continue;
             }
-            PHINode *PN = dyn_cast<PHINode>(&I);
-            PN->replaceIncomingBlockWith(suc, &BB);
+            PHINode *phi = cast<PHINode>(&I);
+            phi->replaceIncomingBlockWith(suc, &BB);
           }
         }
       }
@@ -373,8 +397,13 @@ bool ProgramSlice::canOutline() {
       }
     }
   }
-  // we haven't implemented lazyfication for input argument-dependent slices yet
-  return (_depArgs.size() == 0);
+
+  if (isa<AllocaInst>(_initial)) {
+    errs() << "Cannot outline slice due to slicing criteria being an alloca!\n";
+    return false;
+  }
+
+  return true;
 }
 
 /**
@@ -384,8 +413,8 @@ bool ProgramSlice::canOutline() {
  * outlined slice functions.
  *
  */
-SmallVector<const Value *> ProgramSlice::getOrigFunctionArgs() {
-  SmallVector<const Value *> args;
+SmallVector<Value *> ProgramSlice::getOrigFunctionArgs() {
+  SmallVector<Value *> args;
   for (auto &arg : _depArgs) {
     args.push_back(cast<Value>(arg));
   }
@@ -444,6 +473,8 @@ void ProgramSlice::populateBBsWithInsts(Function *F) {
  *
  */
 void ProgramSlice::reorganizeUses(Function *F) {
+  IRBuilder<> builder(F->getContext());
+  
   for (auto &pair : _Imap) {
     Instruction *originalInst = pair.first;
     Instruction *newInst = pair.second;
@@ -457,16 +488,6 @@ void ProgramSlice::reorganizeUses(Function *F) {
     }
 
     originalInst->replaceUsesWithIf(newInst, [F](Use &U) {
-      auto *UserI = dyn_cast<Instruction>(U.getUser());
-      return UserI && UserI->getParent()->getParent() == F;
-    });
-  }
-
-  for (auto &pair : _argMap) {
-    Argument *origArg = pair.first;
-    Argument *newArg = pair.second;
-
-    origArg->replaceUsesWithIf(newArg, [F](Use &U) {
       auto *UserI = dyn_cast<Instruction>(U.getUser());
       return UserI && UserI->getParent()->getParent() == F;
     });
@@ -499,9 +520,7 @@ void ProgramSlice::addMissingTerminators(Function *F) {
 void ProgramSlice::reorderBlocks(Function *F) {
   BasicBlock *realEntry = nullptr;
   for (BasicBlock &BB : *F) {
-    errs() << "In block: " << BB.getName() << "\n";
     if (BB.hasNPredecessors(0)) {
-      errs() << "Has 0!\n";
       realEntry = &BB;
     }
   }
@@ -538,28 +557,62 @@ SmallVector<Type *> ProgramSlice::getInputArgTypes() {
   return argTypes;
 }
 
+void ProgramSlice::insertLoadForThunkParams(Function *F) {
+  IRBuilder<> builder(F->getContext());
+
+  BasicBlock &entry = F->getEntryBlock();
+  Argument *thunk_struct = F->arg_begin();
+
+  assert(isa<PointerType>(thunk_struct->getType()) && "Sliced function's first argument does not have struct pointer type!");
+
+  builder.SetInsertPoint(&*(entry.getFirstInsertionPt()));
+
+  unsigned int i = 1;
+  for (auto &arg : _depArgs) {
+    Value *new_arg_addr = builder.CreateStructGEP(thunk_struct, i, "_wyvern_arg_addr_" + arg->getName());
+    Value *new_arg = builder.CreateLoad(new_arg_addr, "_wyvern_arg_" + arg->getName());
+
+    arg->replaceUsesWithIf(new_arg, [F](Use &U) {
+      auto *UserI = dyn_cast<Instruction>(U.getUser());
+      return UserI && UserI->getParent()->getParent() == F;
+    });
+
+    _argMap[arg] = new_arg;
+    ++i;
+  }
+}
+
 /**
  * Outlines the given slice into a standalone Function, which
  * encapsulates the computation of the original value in
  * regards to which the slice was created.
  */
-Function *ProgramSlice::outline() {
+std::tuple<Function*, PointerType*> ProgramSlice::outline() {
   Module *M = _initial->getParent()->getParent()->getParent();
   LLVMContext &Ctx = M->getContext();
 
-  SmallVector<Type *> inputTypes = getInputArgTypes();
-  FunctionType *FT = FunctionType::get(_initial->getType(), inputTypes, false);
+  StructType *thunkStructType = StructType::create(Ctx);
+  PointerType *thunkStructPtrType = PointerType::get(thunkStructType, 0);
+  FunctionType *thunkFunctionType =
+      FunctionType::get(_initial->getType(), {thunkStructPtrType}, false);
+  SmallVector<Type *> thunkTypes = {thunkFunctionType->getPointerTo()};
+
+  for (auto type : getInputArgTypes()) {
+    thunkTypes.push_back(type);
+  }
+
+  thunkStructType->setBody(thunkTypes);
+  thunkStructType->setName("_wyvern_thunk_type");
+
+  FunctionType *FT = FunctionType::get(_initial->getType(), {thunkStructPtrType}, false);
+
   std::string functionName =
       "_wyvern_slice_" + _initial->getParent()->getParent()->getName().str() +
       "_" + _initial->getName().str();
   Function *F =
       Function::Create(FT, Function::ExternalLinkage, functionName, M);
 
-  unsigned id = 0;
-  for (Argument &arg : F->args()) {
-    arg.setName(_depArgs[id]->getName());
-    _argMap.insert(std::make_pair(_depArgs[id++], &arg));
-  }
+  F->arg_begin()->setName("_wyvern_thunkptr");
 
   computeAttractorBlocks();
   populateFunctionWithBBs(F);
@@ -568,10 +621,11 @@ Function *ProgramSlice::outline() {
   rerouteBranches(F);
   addReturnValue(F);
   reorderBlocks(F);
+  insertLoadForThunkParams(F);
   verifyFunction(*F);
   printFunctions(F);
 
-  return F;
+  return {F, thunkStructPtrType};
 }
 
 void ProgramSlice::addMemoizationCode(Function *F, ReturnInst *new_ret) {
