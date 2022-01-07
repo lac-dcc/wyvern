@@ -557,7 +557,7 @@ SmallVector<Type *> ProgramSlice::getInputArgTypes() {
   return argTypes;
 }
 
-void ProgramSlice::insertLoadForThunkParams(Function *F) {
+void ProgramSlice::insertLoadForThunkParams(Function *F, bool memo) {
   IRBuilder<> builder(F->getContext());
 
   BasicBlock &entry = F->getEntryBlock();
@@ -567,7 +567,8 @@ void ProgramSlice::insertLoadForThunkParams(Function *F) {
 
   builder.SetInsertPoint(&*(entry.getFirstInsertionPt()));
 
-  unsigned int i = 1;
+  // memo thunk arguments start at 3, due to the memo flag and memoed value taking up two slots
+  unsigned int i = memo ? 3 : 1;
   for (auto &arg : _depArgs) {
     Value *new_arg_addr = builder.CreateStructGEP(thunk_struct, i, "_wyvern_arg_addr_" + arg->getName());
     Value *new_arg = builder.CreateLoad(new_arg_addr, "_wyvern_arg_" + arg->getName());
@@ -621,7 +622,7 @@ std::tuple<Function*, PointerType*> ProgramSlice::outline() {
   rerouteBranches(F);
   addReturnValue(F);
   reorderBlocks(F);
-  insertLoadForThunkParams(F);
+  insertLoadForThunkParams(F, false /*memo*/);
   verifyFunction(*F);
   printFunctions(F);
 
@@ -629,15 +630,13 @@ std::tuple<Function*, PointerType*> ProgramSlice::outline() {
 }
 
 void ProgramSlice::addMemoizationCode(Function *F, ReturnInst *new_ret) {
+  IRBuilder<> builder(F->getContext());
+
   assert(isa<PointerType>(F->arg_begin()->getType()) &&
          "Memoized function does not have PointerType argument!\n");
 
   // boilerplate constants needed to index structs/pointers
   LLVMContext &Ctx = F->getParent()->getContext();
-  ConstantInt *i32_zero = ConstantInt::get(Type::getInt32Ty(Ctx), 0);
-  ConstantInt *i32_one = ConstantInt::get(Type::getInt32Ty(Ctx), 1);
-  ConstantInt *i32_two = ConstantInt::get(Type::getInt32Ty(Ctx), 2);
-  ConstantInt *i8_one = ConstantInt::get(Type::getInt8Ty(Ctx), 1);
 
   // create new entry block and block to insert memoed return
   BasicBlock *oldEntry = &F->getEntryBlock();
@@ -646,30 +645,26 @@ void ProgramSlice::addMemoizationCode(Function *F, ReturnInst *new_ret) {
   BasicBlock *memoRetBlock =
       BasicBlock::Create(Ctx, "_wyvern_memo_ret", F, oldEntry);
 
-  // load addresses and values for thunk struct members
+  // load addresses and values for memo flag
   Value *argValue = F->arg_begin();
-  GetElementPtrInst *memoedValueGep = GetElementPtrInst::CreateInBounds(
-      argValue, {i32_zero, i32_one}, "_memo_val_addr", newEntry);
-  LoadInst *memoedValueLoad =
-      new LoadInst(memoedValueGep->getResultElementType(), memoedValueGep,
-                   "_memo_val", newEntry);
-  GetElementPtrInst *memoFlagGep = GetElementPtrInst::CreateInBounds(
-      argValue, {i32_zero, i32_two}, "_memo_flag_addr", newEntry);
-  LoadInst *memoFlagLoad = new LoadInst(memoFlagGep->getResultElementType(),
-                                        memoFlagGep, "_memo_flag", newEntry);
+  builder.SetInsertPoint(newEntry);
+  Value *memoedValueGEP = builder.CreateStructGEP(argValue, 1, "_wyvern_memo_val_addr");
+  LoadInst *memoedValueLoad = builder.CreateLoad(memoedValueGEP, "_wyvern_memo_val");
+
+  Value *memoFlagGEP = builder.CreateStructGEP(argValue, 2, "_wyvern_memo_flag_addr");
+  LoadInst *memoFlagLoad = builder.CreateLoad(memoFlagGEP, "_wyvern_memo_flag");
 
   // add if (memoFlag == true) { return memo_val; }
-  CastInst *toBool = CastInst::CreateTruncOrBitCast(
-      memoFlagLoad, IntegerType::getInt1Ty(Ctx), "_memo_flag_bool", newEntry);
-  BranchInst *memoCheckBranch =
-      BranchInst::Create(memoRetBlock, oldEntry, toBool, newEntry);
-  ReturnInst *memoedValueRet =
-      ReturnInst::Create(Ctx, memoedValueLoad, memoRetBlock);
+  Value *toBool = builder.CreateTruncOrBitCast(memoFlagLoad, builder.getInt1Ty(), "_wyvern_memo_flag_bool");
+  BranchInst *memoCheckBranch = builder.CreateCondBr(toBool, memoRetBlock, oldEntry);
+
+  builder.SetInsertPoint(memoRetBlock);
+  ReturnInst *memoedValueRet = builder.CreateRet(memoedValueLoad);
 
   // store computed value and update memoization flag
-  StoreInst *memoFlagStore = new StoreInst(i8_one, memoFlagGep, new_ret);
-  StoreInst *memoedValueStore =
-      new StoreInst(new_ret->getReturnValue(), memoedValueGep, new_ret);
+  builder.SetInsertPoint(new_ret);
+  builder.CreateStore(builder.getInt1(1), memoFlagGEP);
+  builder.CreateStore(new_ret->getReturnValue(), memoedValueGEP);
 }
 
 /**
@@ -679,7 +674,7 @@ void ProgramSlice::addMemoizationCode(Function *F, ReturnInst *new_ret) {
  * code so that the function saves its evaluated value and
  * returns it on successive executions.
  */
-Function *ProgramSlice::memoizedOutline() {
+std::tuple<Function*, PointerType*> ProgramSlice::memoizedOutline() {
   Module *M = _initial->getParent()->getParent()->getParent();
   LLVMContext &Ctx = M->getContext();
 
@@ -689,23 +684,31 @@ Function *ProgramSlice::memoizedOutline() {
       FunctionType::get(_initial->getType(), {thunkStructPtrType}, false);
   SmallVector<Type *> thunkTypes = {thunkFunctionType->getPointerTo(),
                                     thunkFunctionType->getReturnType(),
-                                    IntegerType::get(Ctx, 8)};
+                                    IntegerType::get(Ctx, 1)};
+
+  for (auto &arg : _depArgs) {
+    thunkTypes.push_back(arg->getType());
+  }
 
   thunkStructType->setBody(thunkTypes);
+  thunkStructType->setName("_wyvern_thunk_type");
 
   std::string functionName =
-      "_wyvern_slice_" + _initial->getParent()->getParent()->getName().str() +
+      "_wyvern_slice_memo_" + _initial->getParent()->getParent()->getName().str() +
       "_" + _initial->getName().str();
   Function *F = Function::Create(thunkFunctionType, Function::ExternalLinkage,
                                  functionName, M);
 
-  F->arg_begin()->setName("_wyvern_thunk");
+  F->arg_begin()->setName("_wyvern_thunkptr");
 
+  computeAttractorBlocks();
   populateFunctionWithBBs(F);
   populateBBsWithInsts(F);
   reorganizeUses(F);
+  rerouteBranches(F);
   ReturnInst *new_ret = addReturnValue(F);
   reorderBlocks(F);
+  insertLoadForThunkParams(F, true /*memo*/);
   addMemoizationCode(F, new_ret);
 
   verifyFunction(*F);
@@ -715,5 +718,5 @@ Function *ProgramSlice::memoizedOutline() {
                     << *_initial->getParent()->getParent());
   LLVM_DEBUG(dbgs() << "\n======== SLICED FUNCTION ==========\n" << *F);
 
-  return F;
+  return { F, thunkStructPtrType };
 }

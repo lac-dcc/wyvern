@@ -1,7 +1,13 @@
 #define DEBUG_TYPE "WyvernLazyficationPass"
 
+#include "llvm/Transforms/Utils/Cloning.h"
+#include "llvm/Transforms/Utils/Local.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Verifier.h"
 
+#include "FindLazyfiable.h"
+#include "ProgramSlice.h"
 #include "Lazyfication.h"
 
 STATISTIC(NumCallsitesLazified, "The number of callsites whose arguments were lazified.");
@@ -57,21 +63,21 @@ void updateThunkArgUses(Function *F, Argument *optimizedArg, Function *slicedFun
   }
 }
 
-void updateMemoizedThunkArgUses(Function *F, Value *thunkArg, FunctionType *thunkArgType) {
-  LLVMContext &Ctx = F->getParent()->getContext();
+// void updateMemoizedThunkArgUses(Function *F, Value *thunkArg, FunctionType *thunkArgType) {
+//   LLVMContext &Ctx = F->getParent()->getContext();
 
-  ConstantInt *i32_zero = ConstantInt::get(Type::getInt32Ty(Ctx), 0);
+//   ConstantInt *i32_zero = ConstantInt::get(Type::getInt32Ty(Ctx), 0);
 
-  for (auto &Use : thunkArg->uses()) {
-    unsigned int opNo = Use.getOperandNo();
-    auto *UserI = dyn_cast<Instruction>(Use.getUser());
-    if (UserI) {
-      GetElementPtrInst *fPtrGep = GetElementPtrInst::CreateInBounds(thunkArg, { i32_zero, i32_zero }, "_thunk_fptr_addr", UserI);
-      LoadInst *fPtrLoad = new LoadInst(fPtrGep->getResultElementType(), fPtrGep, "_thunk_fptr", UserI);
-      CallInst *thunkFPtrCall = CallInst::Create(thunkArgType, fPtrLoad, { thunkArg }, "_thunk_call", UserI);
-    }
-  }
-}
+//   for (auto &Use : thunkArg->uses()) {
+//     unsigned int opNo = Use.getOperandNo();
+//     auto *UserI = dyn_cast<Instruction>(Use.getUser());
+//     if (UserI) {
+//       GetElementPtrInst *fPtrGep = GetElementPtrInst::CreateInBounds(thunkArg, { i32_zero, i32_zero }, "_thunk_fptr_addr", UserI);
+//       LoadInst *fPtrLoad = new LoadInst(fPtrGep->getResultElementType(), fPtrGep, "_thunk_fptr", UserI);
+//       CallInst *thunkFPtrCall = CallInst::Create(thunkArgType, fPtrLoad, { thunkArg }, "_thunk_call", UserI);
+//     }
+//   }
+// }
 
 Function *cloneCalleeFunction(Function &Callee, int index,
                               Function &slicedFunction, Value *thunkArg, Module &M) {
@@ -103,11 +109,11 @@ Function *cloneCalleeFunction(Function &Callee, int index,
   CloneFunctionInto(newCallee, &Callee, vMap,
                     CloneFunctionChangeType::LocalChangesOnly, Returns);
 
-  if (WyvernLazificationMemoization) {
-    updateMemoizedThunkArgUses(newCallee, thunkArg, slicedFunction.getFunctionType());
-  } else {
+  // if (WyvernLazificationMemoization) {
+  //   updateMemoizedThunkArgUses(newCallee, thunkArg, slicedFunction.getFunctionType());
+  // } else {
     updateThunkArgUses(newCallee, newCallee->getArg(index), &slicedFunction);
-  }
+  // }
 
   verifyFunction(*newCallee);
 
@@ -146,18 +152,28 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, int index,
   Function *thunkFunction;
   PointerType *thunkStructPtrType;
   if (WyvernLazificationMemoization) {
-    thunkFunction = slice.memoizedOutline();
-    
-    ConstantInt *i8_zero = ConstantInt::get(Type::getInt8Ty(M.getContext()), 0);
-    ConstantInt *i32_zero = ConstantInt::get(Type::getInt32Ty(M.getContext()), 0);
-    ConstantInt *i32_two = ConstantInt::get(Type::getInt32Ty(M.getContext()), 2);
+    std::tie(thunkFunction, thunkStructPtrType) = slice.memoizedOutline();
 
-    Type *thunkType = ((PointerType*) thunkFunction->arg_begin()->getType())->getElementType();
-    AllocaInst *thunkAlloca = new AllocaInst(thunkType, 0, "_thunk_alloca", &CI);
-    GetElementPtrInst *thunkFPtrGep = GetElementPtrInst::CreateInBounds(thunkAlloca, { i32_zero }, "_thunk_fptr_gep", &CI);
-    StoreInst *thunkFPtrStore = new StoreInst(thunkFunction, thunkFPtrGep, &CI);
-    GetElementPtrInst *thunkFlagGep = GetElementPtrInst::CreateInBounds(thunkAlloca, { i32_two }, "_thunk_flag_gep", &CI);
-    StoreInst *thunkFlagStore = new StoreInst(i8_zero, thunkFlagGep, &CI);
+    // allocate thunk, initialize it with:
+    // struct thunk {
+    //   fptr = thunkFunction
+    //   memo_flag = 0
+    //   arg0 = x
+    //   arg1 = y
+    //   ...
+    // }
+    AllocaInst *thunkAlloca = builder.CreateAlloca(thunkStructPtrType->getElementType(), nullptr, "_wyvern_thunk_alloca");
+    Value *thunkFPtrGEP = builder.CreateStructGEP(thunkAlloca, 0, "_wyvern_thunk_fptr_gep");
+    builder.CreateStore(thunkFunction, thunkFPtrGEP);
+    Value *thunkFlagGEP = builder.CreateStructGEP(thunkAlloca, 2, "_wyvern_thunk_flag_gep");
+    builder.CreateStore(builder.getInt1(0), thunkFlagGEP);
+
+    unsigned int i = 3;
+    for (auto &arg : slice.getOrigFunctionArgs()) {
+      Value *thunkArgGEP = builder.CreateStructGEP(thunkAlloca, i, "_wyvern_thunk_arg_gep_" + arg->getName());
+      builder.CreateStore(arg, thunkArgGEP);
+      ++i;
+    }
 
     Function *newCallee = cloneCalleeFunction(*callee, index, *thunkFunction, thunkAlloca, M);
 
@@ -166,6 +182,13 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, int index,
   } else {
     std::tie(thunkFunction, thunkStructPtrType) = slice.outline();
 
+    // allocate thunk, initialize it with:
+    // struct thunk {
+    //   fptr = thunkFunction
+    //   arg0 = x
+    //   arg1 = y
+    //   ...
+    // }
     AllocaInst *thunkAlloca = builder.CreateAlloca(thunkStructPtrType->getElementType(), nullptr, "_wyvern_thunk_alloca");
     Value *thunkFPtrGEP = builder.CreateStructGEP(thunkAlloca, 0, "_wyvern_thunk_fptr_gep");
     builder.CreateStore(thunkFunction, thunkFPtrGEP);

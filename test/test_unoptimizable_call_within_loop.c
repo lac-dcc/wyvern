@@ -35,7 +35,7 @@ int maybe_use_arg(int always_used, int maybe_used) {
 int main(int argc, char *argv[]) {
 	if (argc != 3) {
 		fprintf(stderr, "Usage: %s <value1> <value2>\n", argv[0]);
-		return;
+		return 0;
 	}
 
 	return optimizable(atoi(argv[1]), atoi(argv[2]));

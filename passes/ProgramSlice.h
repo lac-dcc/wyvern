@@ -13,11 +13,11 @@ public:
   bool verify();
   SmallVector<Value *> getOrigFunctionArgs();
   std::tuple<Function*, PointerType*> outline();
-  Function *memoizedOutline();
+  std::tuple<Function*, PointerType*> memoizedOutline();
   unsigned int size();
 
 private:
-  void insertLoadForThunkParams(Function *F);
+  void insertLoadForThunkParams(Function *F, bool memo);
   void printFunctions(Function *F);
   void reorderBlocks(Function *F);
   void rerouteBranches(Function *F);

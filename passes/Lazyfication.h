@@ -1,11 +1,3 @@
-#include "llvm/Transforms/Utils/Cloning.h"
-#include "llvm/Transforms/Utils/Local.h"
-#include "llvm/Analysis/LoopInfo.h"
-#include "llvm/ADT/Statistic.h"
-
-#include "FindLazyfiable.h"
-#include "ProgramSlice.h"
-
 namespace llvm {
 struct WyvernLazyficationPass : public ModulePass {
   static char ID;
