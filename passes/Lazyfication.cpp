@@ -23,6 +23,13 @@ static cl::opt<bool> WyvernLazificationMemoization(
     cl::desc(
         "Wyvern - Enable memoization in Lazyfication (implement call-by-need"
         "rather than call-by-name)."));
+static cl::opt<bool> WyvernLazyficationDebuggingInstrumentation(
+    "wylazy-debug", cl::init(false),
+    cl::desc(
+        "Wyvern - Enable debugging in Lazyfication. This inserts calls"
+        "to printf that track when slices are executed."
+        "CURRENTLY UNIMPLEMENTED!"
+    ));
 
 static unsigned int getNumberOfInsts(Function &F) {
   unsigned int size = 0;
@@ -63,22 +70,6 @@ void updateThunkArgUses(Function *F, Argument *optimizedArg, Function *slicedFun
   }
 }
 
-// void updateMemoizedThunkArgUses(Function *F, Value *thunkArg, FunctionType *thunkArgType) {
-//   LLVMContext &Ctx = F->getParent()->getContext();
-
-//   ConstantInt *i32_zero = ConstantInt::get(Type::getInt32Ty(Ctx), 0);
-
-//   for (auto &Use : thunkArg->uses()) {
-//     unsigned int opNo = Use.getOperandNo();
-//     auto *UserI = dyn_cast<Instruction>(Use.getUser());
-//     if (UserI) {
-//       GetElementPtrInst *fPtrGep = GetElementPtrInst::CreateInBounds(thunkArg, { i32_zero, i32_zero }, "_thunk_fptr_addr", UserI);
-//       LoadInst *fPtrLoad = new LoadInst(fPtrGep->getResultElementType(), fPtrGep, "_thunk_fptr", UserI);
-//       CallInst *thunkFPtrCall = CallInst::Create(thunkArgType, fPtrLoad, { thunkArg }, "_thunk_call", UserI);
-//     }
-//   }
-// }
-
 Function *cloneCalleeFunction(Function &Callee, int index,
                               Function &slicedFunction, Value *thunkArg, Module &M) {
   SmallVector<Type *> argTypes;
@@ -109,11 +100,8 @@ Function *cloneCalleeFunction(Function &Callee, int index,
   CloneFunctionInto(newCallee, &Callee, vMap,
                     CloneFunctionChangeType::LocalChangesOnly, Returns);
 
-  // if (WyvernLazificationMemoization) {
-  //   updateMemoizedThunkArgUses(newCallee, thunkArg, slicedFunction.getFunctionType());
-  // } else {
-    updateThunkArgUses(newCallee, newCallee->getArg(index), &slicedFunction);
-  // }
+
+  updateThunkArgUses(newCallee, newCallee->getArg(index), &slicedFunction);
 
   verifyFunction(*newCallee);
 
