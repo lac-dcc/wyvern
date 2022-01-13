@@ -10,7 +10,7 @@ class ProgramSlice {
 public:
   ProgramSlice(Instruction &I, Function &F, CallInst &CallSite);
   bool canOutline();
-  bool verify();
+  bool verify(std::unordered_map<const BasicBlock *, SmallVector<const Value *>> &gates);
   SmallVector<Value *> getOrigFunctionArgs();
   std::tuple<Function*, PointerType*> outline();
   std::tuple<Function*, PointerType*> memoizedOutline();
@@ -18,6 +18,8 @@ public:
 
 private:
   void insertLoadForThunkParams(Function *F, bool memo);
+  bool hasUniqueAttractor(Instruction *terminator);
+  const BasicBlock *getUniqueAttractor(Instruction *terminator);
   void printFunctions(Function *F);
   void reorderBlocks(Function *F);
   void rerouteBranches(Function *F);

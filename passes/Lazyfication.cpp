@@ -5,6 +5,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Transforms/Utils/Local.h"
 
 #include "FindLazyfiable.h"
 #include "ProgramSlice.h"
@@ -119,8 +120,8 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, int index,
 
   Function *caller = CI.getParent()->getParent();
   ProgramSlice slice = ProgramSlice(*lazyfiableArg, *caller, CI);
-  if (!slice.canOutline() || !slice.verify()) {
-    errs() << "Cannot lazify argument. Slice is not outlineable!\n";
+  if (!slice.canOutline()) {
+    LLVM_DEBUG(dbgs() << "Cannot lazify argument. Slice is not outlineable!\n");
     return false;
   }
 

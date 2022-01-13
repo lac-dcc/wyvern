@@ -164,36 +164,19 @@ ProgramSlice::ProgramSlice(Instruction &Initial, Function &F,
   _BBsInSlice = BBsInSlice;
   _CallSite = &CallSite;
 
+  computeAttractorBlocks();
+  verify(gates);
+
   LLVM_DEBUG(printSlice());
 }
 
-bool ProgramSlice::verify() {
-  DominatorTree DT(*_parentFunction);
-  PostDominatorTree PDT;
-  PDT.recalculate(*_parentFunction);
-
-  for (auto *I : _instsInSlice) {
-    if (const BranchInst *BI = dyn_cast<BranchInst>(I)) {
-      bool hasPostDom = false;
-      for (const BasicBlock *Succ : BI->successors()) {
-        DomTreeNode *SuccNode = PDT.getNode(Succ);
-        DomTreeNode *IDom = SuccNode->getIDom();
-        hasPostDom |= (_BBsInSlice.count(Succ) > 0);
-        while (!hasPostDom && IDom != nullptr) {
-          if (_BBsInSlice.count(IDom->getBlock()) > 0) {
-            hasPostDom = true;
-            break;
-          }
-          IDom = IDom->getIDom();
-        }
-      }
-      if (!hasPostDom) {
-        errs() << "Branch has no postdom in slice: " << *BI
-               << " Slice Size: " << _instsInSlice.size()
-               << " Function size: " << _parentFunction->size() << "\n";
-
-        ++InvalidSlices;
-        return false;
+bool ProgramSlice::verify(std::unordered_map<const BasicBlock *, SmallVector<const Value *>> &gates) {
+  for (const BasicBlock *BB : _BBsInSlice) {
+    const BasicBlock *attractor = _attractors[BB];
+    const BranchInst *term = (BranchInst*) BB->getTerminator();
+    if (term && _instsInSlice.count(term)) {
+      for (const BasicBlock *succ : term->successors()) {
+        const BasicBlock *succAttractor = _attractors[succ];
       }
     }
   }
@@ -278,6 +261,43 @@ void ProgramSlice::addDomBranches(DomTreeNode *cur, DomTreeNode *parent,
   }
 }
 
+bool ProgramSlice::hasUniqueAttractor(Instruction *terminator) {
+  int num_attractors = 0;
+  if (BranchInst *BI = dyn_cast<BranchInst>(terminator)) {
+    for (const BasicBlock *succ : BI->successors()) {
+      const BasicBlock *attractor = _attractors[succ];
+      if (attractor) { num_attractors++; }
+    }
+  }
+  else if (SwitchInst *SI = dyn_cast<SwitchInst>(terminator)) {
+    for (auto &switchCase : SI->cases()) {
+      const BasicBlock *succ = switchCase.getCaseSuccessor();
+      const BasicBlock *attractor = _attractors[succ];
+      if (attractor) { num_attractors++; }
+    }
+  }
+  return num_attractors == 1;
+}
+
+const BasicBlock *ProgramSlice::getUniqueAttractor(Instruction *terminator) {
+  if (BranchInst *BI = dyn_cast<BranchInst>(terminator)) {
+    for (const BasicBlock *succ : BI->successors()) {
+      const BasicBlock *attractor = _attractors[succ];
+      if (attractor) { return attractor; }
+    }
+  }
+  else if (SwitchInst *SI = dyn_cast<SwitchInst>(terminator)) {
+    for (auto &switchCase : SI->cases()) {
+      const BasicBlock *succ = switchCase.getCaseSuccessor();
+      const BasicBlock *attractor = _attractors[succ];
+      if (attractor) { return attractor; }
+    }
+  }
+
+  assert(true && "Terminator instruction does not have attractor for successors!");
+  return nullptr;
+}
+
 void ProgramSlice::rerouteBranches(Function *F) {
   DominatorTree DT(*_parentFunction);
   std::set<DomTreeNode *> visited;
@@ -341,20 +361,33 @@ void ProgramSlice::rerouteBranches(Function *F) {
       // Otherwise, the block's original branch was part of the slice...
       Instruction *term = BB.getTerminator();
       if (BranchInst *BI = dyn_cast<BranchInst>(term)) {
-        for (unsigned int idx = 0; idx < BI->getNumSuccessors(); ++idx) {
-          BasicBlock *suc = BI->getSuccessor(idx);
-          if (suc->getParent() == F) {
-            continue;
+        if (hasUniqueAttractor(BI)) {
+          // If the block has a unique successor in the slice, make it so its branch is now unconditional, and branches directly to its attractor.
+          const BasicBlock *attractor = getUniqueAttractor(BI);
+          BasicBlock *newTarget = _origToNewBBmap[attractor];
+          if (Instruction *cond = dyn_cast<Instruction>(BI->getCondition())) {
+            cond->replaceAllUsesWith(UndefValue::get(cond->getType()));
+            cond->eraseFromParent();
           }
-          const BasicBlock *attractor = _attractors[suc];
-          BasicBlock *newSucc = _origToNewBBmap[attractor];
-          BI->setSuccessor(idx, newSucc);
-          for (Instruction &I : *newSucc) {
-            if (!isa<PHINode>(I)) {
+          BranchInst *newBr = BranchInst::Create(newTarget, &BB);
+          BI->replaceAllUsesWith(newBr);
+          BI->eraseFromParent();
+        } else {
+          for (unsigned int idx = 0; idx < BI->getNumSuccessors(); ++idx) {
+            BasicBlock *suc = BI->getSuccessor(idx);
+            if (suc->getParent() == F) {
               continue;
             }
-            PHINode *phi = cast<PHINode>(&I);
-            phi->replaceIncomingBlockWith(suc, &BB);
+            const BasicBlock *attractor = _attractors[suc];
+            BasicBlock *newSucc = _origToNewBBmap[attractor];
+            BI->setSuccessor(idx, newSucc);
+            for (Instruction &I : *newSucc) {
+              if (!isa<PHINode>(I)) {
+                continue;
+              }
+              PHINode *phi = cast<PHINode>(&I);
+              phi->replaceIncomingBlockWith(suc, &BB);
+            }
           }
         }
       } else if (SwitchInst *SI = dyn_cast<SwitchInst>(term)) {
@@ -618,7 +651,6 @@ std::tuple<Function*, PointerType*> ProgramSlice::outline() {
 
   F->arg_begin()->setName("_wyvern_thunkptr");
 
-  computeAttractorBlocks();
   populateFunctionWithBBs(F);
   populateBBsWithInsts(F);
   reorganizeUses(F);
@@ -704,7 +736,6 @@ std::tuple<Function*, PointerType*> ProgramSlice::memoizedOutline() {
 
   F->arg_begin()->setName("_wyvern_thunkptr");
 
-  computeAttractorBlocks();
   populateFunctionWithBBs(F);
   populateBBsWithInsts(F);
   reorganizeUses(F);
