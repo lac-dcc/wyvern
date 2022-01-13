@@ -105,7 +105,6 @@ get_data_dependences_for(
   while (!to_visit.empty()) {
     const Value *cur = to_visit.front();
     deps.insert(cur);
-    visited.insert(cur);
     to_visit.pop();
 
     if (const Instruction *dep = dyn_cast<Instruction>(cur)) {
@@ -114,11 +113,15 @@ get_data_dependences_for(
         if ((!isa<Instruction>(U) && !isa<Argument>(U)) || visited.count(U)) {
           continue;
         }
+        visited.insert(U);
         to_visit.push(U);
       }
     }
 
     if (const PHINode *PN = dyn_cast<PHINode>(cur)) {
+      for (const BasicBlock *BB : PN->blocks()) {
+        BBs.insert(BB);
+      }
       for (const Value *gate : gates[PN->getParent()]) {
         if (!visited.count(gate)) {
           to_visit.push(gate);
@@ -390,16 +393,16 @@ bool ProgramSlice::canOutline() {
   if (LI.getLoopDepth(_CallSite->getParent()) > 0) {
     for (const BasicBlock *BB : _BBsInSlice) {
       if (LI.getLoopDepth(BB) <= LI.getLoopDepth(_CallSite->getParent())) {
-        errs() << "BB " << BB->getName()
+        LLVM_DEBUG(dbgs() << "BB " << BB->getName()
                << " is in same or lower loop depth as CallSite BB "
-               << _CallSite->getParent()->getName() << "\n";
+               << _CallSite->getParent()->getName() << "\n");
         return false;
       }
     }
   }
 
   if (isa<AllocaInst>(_initial)) {
-    errs() << "Cannot outline slice due to slicing criteria being an alloca!\n";
+    LLVM_DEBUG((dbgs() << "Cannot outline slice due to slicing criteria being an alloca!\n"));
     return false;
   }
 
