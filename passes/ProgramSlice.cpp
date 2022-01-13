@@ -165,8 +165,7 @@ ProgramSlice::ProgramSlice(Instruction &Initial, Function &F,
   _CallSite = &CallSite;
 
   computeAttractorBlocks();
-  verify(gates);
-
+  
   LLVM_DEBUG(printSlice());
 }
 
