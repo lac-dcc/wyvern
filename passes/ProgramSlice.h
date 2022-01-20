@@ -10,7 +10,6 @@ class ProgramSlice {
 public:
   ProgramSlice(Instruction &I, Function &F, CallInst &CallSite);
   bool canOutline();
-  bool verify(std::unordered_map<const BasicBlock *, SmallVector<const Value *>> &gates);
   SmallVector<Value *> getOrigFunctionArgs();
   std::tuple<Function*, PointerType*> outline();
   std::tuple<Function*, PointerType*> memoizedOutline();

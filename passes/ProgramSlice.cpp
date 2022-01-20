@@ -169,20 +169,6 @@ ProgramSlice::ProgramSlice(Instruction &Initial, Function &F,
   LLVM_DEBUG(printSlice());
 }
 
-bool ProgramSlice::verify(
-    std::unordered_map<const BasicBlock *, SmallVector<const Value *>> &gates) {
-  for (const BasicBlock *BB : _BBsInSlice) {
-    const BasicBlock *attractor = _attractors[BB];
-    const BranchInst *term = (BranchInst *)BB->getTerminator();
-    if (term && _instsInSlice.count(term)) {
-      for (const BasicBlock *succ : term->successors()) {
-        const BasicBlock *succAttractor = _attractors[succ];
-      }
-    }
-  }
-  return true;
-}
-
 void ProgramSlice::printSlice() {
   LLVM_DEBUG(dbgs() << "\n\n ==== Slicing function "
                     << _parentFunction->getName() << " with size "
