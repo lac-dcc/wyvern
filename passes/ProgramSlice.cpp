@@ -165,14 +165,15 @@ ProgramSlice::ProgramSlice(Instruction &Initial, Function &F,
   _CallSite = &CallSite;
 
   computeAttractorBlocks();
-  
+
   LLVM_DEBUG(printSlice());
 }
 
-bool ProgramSlice::verify(std::unordered_map<const BasicBlock *, SmallVector<const Value *>> &gates) {
+bool ProgramSlice::verify(
+    std::unordered_map<const BasicBlock *, SmallVector<const Value *>> &gates) {
   for (const BasicBlock *BB : _BBsInSlice) {
     const BasicBlock *attractor = _attractors[BB];
-    const BranchInst *term = (BranchInst*) BB->getTerminator();
+    const BranchInst *term = (BranchInst *)BB->getTerminator();
     if (term && _instsInSlice.count(term)) {
       for (const BasicBlock *succ : term->successors()) {
         const BasicBlock *succAttractor = _attractors[succ];
@@ -265,14 +266,17 @@ bool ProgramSlice::hasUniqueAttractor(Instruction *terminator) {
   if (BranchInst *BI = dyn_cast<BranchInst>(terminator)) {
     for (const BasicBlock *succ : BI->successors()) {
       const BasicBlock *attractor = _attractors[succ];
-      if (attractor) { num_attractors++; }
+      if (attractor) {
+        num_attractors++;
+      }
     }
-  }
-  else if (SwitchInst *SI = dyn_cast<SwitchInst>(terminator)) {
+  } else if (SwitchInst *SI = dyn_cast<SwitchInst>(terminator)) {
     for (auto &switchCase : SI->cases()) {
       const BasicBlock *succ = switchCase.getCaseSuccessor();
       const BasicBlock *attractor = _attractors[succ];
-      if (attractor) { num_attractors++; }
+      if (attractor) {
+        num_attractors++;
+      }
     }
   }
   return num_attractors == 1;
@@ -282,18 +286,22 @@ const BasicBlock *ProgramSlice::getUniqueAttractor(Instruction *terminator) {
   if (BranchInst *BI = dyn_cast<BranchInst>(terminator)) {
     for (const BasicBlock *succ : BI->successors()) {
       const BasicBlock *attractor = _attractors[succ];
-      if (attractor) { return attractor; }
+      if (attractor) {
+        return attractor;
+      }
     }
-  }
-  else if (SwitchInst *SI = dyn_cast<SwitchInst>(terminator)) {
+  } else if (SwitchInst *SI = dyn_cast<SwitchInst>(terminator)) {
     for (auto &switchCase : SI->cases()) {
       const BasicBlock *succ = switchCase.getCaseSuccessor();
       const BasicBlock *attractor = _attractors[succ];
-      if (attractor) { return attractor; }
+      if (attractor) {
+        return attractor;
+      }
     }
   }
 
-  assert(true && "Terminator instruction does not have attractor for successors!");
+  assert(true &&
+         "Terminator instruction does not have attractor for successors!");
   return nullptr;
 }
 
@@ -316,7 +324,7 @@ void ProgramSlice::rerouteBranches(Function *F) {
   // new blocks as predecessors in merging values. We store PHIs to update
   // at the end of the function to avoid invalidating iterators if we
   // modify in-place.
-  std::map<PHINode*, std::pair<BasicBlock*, BasicBlock*>> PHIsToUpdate;
+  std::map<PHINode *, std::pair<BasicBlock *, BasicBlock *>> PHIsToUpdate;
 
   // Now iterate over every block in the slice...
   for (BasicBlock &BB : *F) {
@@ -339,7 +347,7 @@ void ProgramSlice::rerouteBranches(Function *F) {
               }
               PHINode *phi = cast<PHINode>(&I);
               for (BasicBlock *newTargetPHIBB : phi->blocks()) {
-                if(newTargetPHIBB->getParent() != F) {
+                if (newTargetPHIBB->getParent() != F) {
                   DomTreeNode *OrigBB = DT.getNode(newTargetPHIBB);
                   DomTreeNode *Cand = OrigBB->getIDom();
                   while (Cand != nullptr) {
@@ -348,7 +356,9 @@ void ProgramSlice::rerouteBranches(Function *F) {
                     }
                     Cand = Cand->getIDom();
                   }
-                  if (Cand) { phi->replaceIncomingBlockWith(newTargetPHIBB, &BB); }
+                  if (Cand) {
+                    phi->replaceIncomingBlockWith(newTargetPHIBB, &BB);
+                  }
                 }
               }
             }
@@ -361,7 +371,9 @@ void ProgramSlice::rerouteBranches(Function *F) {
       Instruction *term = BB.getTerminator();
       if (BranchInst *BI = dyn_cast<BranchInst>(term)) {
         if (hasUniqueAttractor(BI)) {
-          // If the block has a unique successor in the slice, make it so its branch is now unconditional, and branches directly to its attractor.
+          // If the block has a unique attractor in the slice, make it so its
+          // branch is now unconditional, and branches directly to its
+          // attractor.
           const BasicBlock *attractor = getUniqueAttractor(BI);
           BasicBlock *newTarget = _origToNewBBmap[attractor];
           if (Instruction *cond = dyn_cast<Instruction>(BI->getCondition())) {
@@ -426,15 +438,17 @@ bool ProgramSlice::canOutline() {
     for (const BasicBlock *BB : _BBsInSlice) {
       if (LI.getLoopDepth(BB) <= LI.getLoopDepth(_CallSite->getParent())) {
         LLVM_DEBUG(dbgs() << "BB " << BB->getName()
-               << " is in same or lower loop depth as CallSite BB "
-               << _CallSite->getParent()->getName() << "\n");
+                          << " is in same or lower loop depth as CallSite BB "
+                          << _CallSite->getParent()->getName() << "\n");
         return false;
       }
     }
   }
 
   if (isa<AllocaInst>(_initial)) {
-    LLVM_DEBUG((dbgs() << "Cannot outline slice due to slicing criteria being an alloca!\n"));
+    LLVM_DEBUG(
+        (dbgs()
+         << "Cannot outline slice due to slicing criteria being an alloca!\n"));
     return false;
   }
 
@@ -509,7 +523,7 @@ void ProgramSlice::populateBBsWithInsts(Function *F) {
  */
 void ProgramSlice::reorganizeUses(Function *F) {
   IRBuilder<> builder(F->getContext());
-  
+
   for (auto &pair : _Imap) {
     Instruction *originalInst = pair.first;
     Instruction *newInst = pair.second;
@@ -598,15 +612,19 @@ void ProgramSlice::insertLoadForThunkParams(Function *F, bool memo) {
   BasicBlock &entry = F->getEntryBlock();
   Argument *thunk_struct = F->arg_begin();
 
-  assert(isa<PointerType>(thunk_struct->getType()) && "Sliced function's first argument does not have struct pointer type!");
+  assert(isa<PointerType>(thunk_struct->getType()) &&
+         "Sliced function's first argument does not have struct pointer type!");
 
   builder.SetInsertPoint(&*(entry.getFirstInsertionPt()));
 
-  // memo thunk arguments start at 3, due to the memo flag and memoed value taking up two slots
+  // memo thunk arguments start at 3, due to the memo flag and memoed value
+  // taking up two slots
   unsigned int i = memo ? 3 : 1;
   for (auto &arg : _depArgs) {
-    Value *new_arg_addr = builder.CreateStructGEP(thunk_struct, i, "_wyvern_arg_addr_" + arg->getName());
-    Value *new_arg = builder.CreateLoad(new_arg_addr, "_wyvern_arg_" + arg->getName());
+    Value *new_arg_addr = builder.CreateStructGEP(
+        thunk_struct, i, "_wyvern_arg_addr_" + arg->getName());
+    Value *new_arg =
+        builder.CreateLoad(new_arg_addr, "_wyvern_arg_" + arg->getName());
 
     arg->replaceUsesWithIf(new_arg, [F](Use &U) {
       auto *UserI = dyn_cast<Instruction>(U.getUser());
@@ -623,7 +641,7 @@ void ProgramSlice::insertLoadForThunkParams(Function *F, bool memo) {
  * encapsulates the computation of the original value in
  * regards to which the slice was created.
  */
-std::tuple<Function*, PointerType*> ProgramSlice::outline() {
+std::tuple<Function *, PointerType *> ProgramSlice::outline() {
   Module *M = _initial->getParent()->getParent()->getParent();
   LLVMContext &Ctx = M->getContext();
 
@@ -640,7 +658,8 @@ std::tuple<Function*, PointerType*> ProgramSlice::outline() {
   thunkStructType->setBody(thunkTypes);
   thunkStructType->setName("_wyvern_thunk_type");
 
-  FunctionType *FT = FunctionType::get(_initial->getType(), {thunkStructPtrType}, false);
+  FunctionType *FT =
+      FunctionType::get(_initial->getType(), {thunkStructPtrType}, false);
 
   std::string functionName =
       "_wyvern_slice_" + _initial->getParent()->getParent()->getName().str() +
@@ -682,15 +701,20 @@ void ProgramSlice::addMemoizationCode(Function *F, ReturnInst *new_ret) {
   // load addresses and values for memo flag
   Value *argValue = F->arg_begin();
   builder.SetInsertPoint(newEntry);
-  Value *memoedValueGEP = builder.CreateStructGEP(argValue, 1, "_wyvern_memo_val_addr");
-  LoadInst *memoedValueLoad = builder.CreateLoad(memoedValueGEP, "_wyvern_memo_val");
+  Value *memoedValueGEP =
+      builder.CreateStructGEP(argValue, 1, "_wyvern_memo_val_addr");
+  LoadInst *memoedValueLoad =
+      builder.CreateLoad(memoedValueGEP, "_wyvern_memo_val");
 
-  Value *memoFlagGEP = builder.CreateStructGEP(argValue, 2, "_wyvern_memo_flag_addr");
+  Value *memoFlagGEP =
+      builder.CreateStructGEP(argValue, 2, "_wyvern_memo_flag_addr");
   LoadInst *memoFlagLoad = builder.CreateLoad(memoFlagGEP, "_wyvern_memo_flag");
 
   // add if (memoFlag == true) { return memo_val; }
-  Value *toBool = builder.CreateTruncOrBitCast(memoFlagLoad, builder.getInt1Ty(), "_wyvern_memo_flag_bool");
-  BranchInst *memoCheckBranch = builder.CreateCondBr(toBool, memoRetBlock, oldEntry);
+  Value *toBool = builder.CreateTruncOrBitCast(
+      memoFlagLoad, builder.getInt1Ty(), "_wyvern_memo_flag_bool");
+  BranchInst *memoCheckBranch =
+      builder.CreateCondBr(toBool, memoRetBlock, oldEntry);
 
   builder.SetInsertPoint(memoRetBlock);
   ReturnInst *memoedValueRet = builder.CreateRet(memoedValueLoad);
@@ -708,7 +732,7 @@ void ProgramSlice::addMemoizationCode(Function *F, ReturnInst *new_ret) {
  * code so that the function saves its evaluated value and
  * returns it on successive executions.
  */
-std::tuple<Function*, PointerType*> ProgramSlice::memoizedOutline() {
+std::tuple<Function *, PointerType *> ProgramSlice::memoizedOutline() {
   Module *M = _initial->getParent()->getParent()->getParent();
   LLVMContext &Ctx = M->getContext();
 
@@ -728,8 +752,9 @@ std::tuple<Function*, PointerType*> ProgramSlice::memoizedOutline() {
   thunkStructType->setName("_wyvern_thunk_type");
 
   std::string functionName =
-      "_wyvern_slice_memo_" + _initial->getParent()->getParent()->getName().str() +
-      "_" + _initial->getName().str();
+      "_wyvern_slice_memo_" +
+      _initial->getParent()->getParent()->getName().str() + "_" +
+      _initial->getName().str();
   Function *F = Function::Create(thunkFunctionType, Function::ExternalLinkage,
                                  functionName, M);
 
@@ -751,5 +776,5 @@ std::tuple<Function*, PointerType*> ProgramSlice::memoizedOutline() {
                     << *_initial->getParent()->getParent());
   LLVM_DEBUG(dbgs() << "\n======== SLICED FUNCTION ==========\n" << *F);
 
-  return { F, thunkStructPtrType };
+  return {F, thunkStructPtrType};
 }

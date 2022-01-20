@@ -8,12 +8,6 @@
 
 int maybe_use_arg(int w, int z);
 
-int a;
-
-int dummy(void) {
-	return a;
-}
-
 int optimizable(int it) {
 	int maybe = 0;
 	for (int i = 0; i < it; i++) {

@@ -1,21 +1,25 @@
 #define DEBUG_TYPE "WyvernLazyficationPass"
 
-#include "llvm/Transforms/Utils/Cloning.h"
-#include "llvm/Transforms/Utils/Local.h"
-#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 
 #include "FindLazyfiable.h"
-#include "ProgramSlice.h"
 #include "Lazyfication.h"
+#include "ProgramSlice.h"
 
-STATISTIC(NumCallsitesLazified, "The number of callsites whose arguments were lazified.");
-STATISTIC(NumFunctionsLazified, "The number of {function, argument} pairs that were lazified.");
-STATISTIC(LargestSliceSize, "Size of largest slice generated for lazification.");
-STATISTIC(SmallestSliceSize, "Size of smallest slice generated for lazification.");
-STATISTIC(TotalSliceSize, "Cumulative size of all slices generated for lazification.");
+STATISTIC(NumCallsitesLazified,
+          "The number of callsites whose arguments were lazified.");
+STATISTIC(NumFunctionsLazified,
+          "The number of {function, argument} pairs that were lazified.");
+STATISTIC(LargestSliceSize,
+          "Size of largest slice generated for lazification.");
+STATISTIC(SmallestSliceSize,
+          "Size of smallest slice generated for lazification.");
+STATISTIC(TotalSliceSize,
+          "Cumulative size of all slices generated for lazification.");
 
 using namespace llvm;
 
@@ -26,11 +30,9 @@ static cl::opt<bool> WyvernLazificationMemoization(
         "rather than call-by-name)."));
 static cl::opt<bool> WyvernLazyficationDebuggingInstrumentation(
     "wylazy-debug", cl::init(false),
-    cl::desc(
-        "Wyvern - Enable debugging in Lazyfication. This inserts calls"
-        "to printf that track when slices are executed."
-        "CURRENTLY UNIMPLEMENTED!"
-    ));
+    cl::desc("Wyvern - Enable debugging in Lazyfication. This inserts calls"
+             "to printf that track when slices are executed."
+             "CURRENTLY UNIMPLEMENTED!"));
 
 static unsigned int getNumberOfInsts(Function &F) {
   unsigned int size = 0;
@@ -42,19 +44,32 @@ static unsigned int getNumberOfInsts(Function &F) {
   return size;
 }
 
-void updateThunkArgUses(Function *F, Argument *optimizedArg, Function *slicedFunction) {
-  std::map<User*, CallInst*> userCalls;
-  std::set<Use*> usesToChange;
+void updateThunkArgUses(Function *F, Argument *optimizedArg,
+                        Function *slicedFunction) {
+  std::map<User *, CallInst *> userCalls;
+  std::set<Use *> usesToChange;
 
   IRBuilder<> builder(F->getContext());
 
-  for (auto *User : optimizedArg->users()) {
-    Instruction *UserI = dyn_cast<Instruction>(User);
+  for (auto &Use : optimizedArg->uses()) {
+    Instruction *UserI = dyn_cast<Instruction>(Use.getUser());
     if (UserI && !userCalls.count(UserI)) {
-      builder.SetInsertPoint(UserI);
-      Value *thunkFPtrGEP = builder.CreateStructGEP(optimizedArg, 0, "_wyvern_thunk_fptr_addr");
-      Value *thunkFPtrLoad = builder.CreateLoad(thunkFPtrGEP, "_wyvern_thunkfptr");
-      CallInst *thunkCall = builder.CreateCall(slicedFunction->getFunctionType(), thunkFPtrLoad, {optimizedArg}, "_wyvern_thunkcall");
+      // if the use is a PHINode, the use happens at the edge, so we cannot
+      // insert the thunk load/call at the PHI's block. Instead, we must insert
+      // them at the end of the block which flows into the PHI node
+      if (PHINode *PN = dyn_cast<PHINode>(UserI)) {
+        BasicBlock *origin = PN->getIncomingBlock(Use);
+        builder.SetInsertPoint(origin->getTerminator());
+      } else {
+        builder.SetInsertPoint(UserI);
+      }
+      Value *thunkFPtrGEP =
+          builder.CreateStructGEP(optimizedArg, 0, "_wyvern_thunk_fptr_addr");
+      Value *thunkFPtrLoad =
+          builder.CreateLoad(thunkFPtrGEP, "_wyvern_thunkfptr");
+      CallInst *thunkCall =
+          builder.CreateCall(slicedFunction->getFunctionType(), thunkFPtrLoad,
+                             {optimizedArg}, "_wyvern_thunkcall");
       userCalls[UserI] = thunkCall;
     }
   }
@@ -72,7 +87,8 @@ void updateThunkArgUses(Function *F, Argument *optimizedArg, Function *slicedFun
 }
 
 Function *cloneCalleeFunction(Function &Callee, int index,
-                              Function &slicedFunction, Value *thunkArg, Module &M) {
+                              Function &slicedFunction, Value *thunkArg,
+                              Module &M) {
   SmallVector<Type *> argTypes;
   for (auto &arg : Callee.args()) {
     argTypes.push_back(arg.getType());
@@ -100,7 +116,6 @@ Function *cloneCalleeFunction(Function &Callee, int index,
   SmallVector<ReturnInst *, 4> Returns;
   CloneFunctionInto(newCallee, &Callee, vMap,
                     CloneFunctionChangeType::LocalChangesOnly, Returns);
-
 
   updateThunkArgUses(newCallee, newCallee->getArg(index), &slicedFunction);
 
@@ -140,6 +155,7 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, int index,
 
   Function *thunkFunction;
   PointerType *thunkStructPtrType;
+  Function *newCallee;
   if (WyvernLazificationMemoization) {
     std::tie(thunkFunction, thunkStructPtrType) = slice.memoizedOutline();
 
@@ -151,20 +167,25 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, int index,
     //   arg1 = y
     //   ...
     // }
-    AllocaInst *thunkAlloca = builder.CreateAlloca(thunkStructPtrType->getElementType(), nullptr, "_wyvern_thunk_alloca");
-    Value *thunkFPtrGEP = builder.CreateStructGEP(thunkAlloca, 0, "_wyvern_thunk_fptr_gep");
+    AllocaInst *thunkAlloca = builder.CreateAlloca(
+        thunkStructPtrType->getElementType(), nullptr, "_wyvern_thunk_alloca");
+    Value *thunkFPtrGEP =
+        builder.CreateStructGEP(thunkAlloca, 0, "_wyvern_thunk_fptr_gep");
     builder.CreateStore(thunkFunction, thunkFPtrGEP);
-    Value *thunkFlagGEP = builder.CreateStructGEP(thunkAlloca, 2, "_wyvern_thunk_flag_gep");
+    Value *thunkFlagGEP =
+        builder.CreateStructGEP(thunkAlloca, 2, "_wyvern_thunk_flag_gep");
     builder.CreateStore(builder.getInt1(0), thunkFlagGEP);
 
     unsigned int i = 3;
     for (auto &arg : slice.getOrigFunctionArgs()) {
-      Value *thunkArgGEP = builder.CreateStructGEP(thunkAlloca, i, "_wyvern_thunk_arg_gep_" + arg->getName());
+      Value *thunkArgGEP = builder.CreateStructGEP(
+          thunkAlloca, i, "_wyvern_thunk_arg_gep_" + arg->getName());
       builder.CreateStore(arg, thunkArgGEP);
       ++i;
     }
 
-    Function *newCallee = cloneCalleeFunction(*callee, index, *thunkFunction, thunkAlloca, M);
+    newCallee =
+        cloneCalleeFunction(*callee, index, *thunkFunction, thunkAlloca, M);
 
     CI.setCalledFunction(newCallee);
     CI.setArgOperand(index, thunkAlloca);
@@ -178,18 +199,21 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, int index,
     //   arg1 = y
     //   ...
     // }
-    AllocaInst *thunkAlloca = builder.CreateAlloca(thunkStructPtrType->getElementType(), nullptr, "_wyvern_thunk_alloca");
-    Value *thunkFPtrGEP = builder.CreateStructGEP(thunkAlloca, 0, "_wyvern_thunk_fptr_gep");
+    AllocaInst *thunkAlloca = builder.CreateAlloca(
+        thunkStructPtrType->getElementType(), nullptr, "_wyvern_thunk_alloca");
+    Value *thunkFPtrGEP =
+        builder.CreateStructGEP(thunkAlloca, 0, "_wyvern_thunk_fptr_gep");
     builder.CreateStore(thunkFunction, thunkFPtrGEP);
 
     unsigned int i = 1;
     for (auto &arg : slice.getOrigFunctionArgs()) {
-      Value *thunkArgGEP = builder.CreateStructGEP(thunkAlloca, i, "_wyvern_thunk_arg_gep_" + arg->getName());
+      Value *thunkArgGEP = builder.CreateStructGEP(
+          thunkAlloca, i, "_wyvern_thunk_arg_gep_" + arg->getName());
       builder.CreateStore(arg, thunkArgGEP);
       ++i;
     }
 
-    Function *newCallee =
+    newCallee =
         cloneCalleeFunction(*callee, index, *thunkFunction, thunkAlloca, M);
     CI.setCalledFunction(newCallee);
     CI.setArgOperand(index, thunkAlloca);
