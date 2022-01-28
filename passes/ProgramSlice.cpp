@@ -10,6 +10,10 @@
 #include <utility>
 
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/MemoryLocation.h"
+#include "llvm/Analysis/PostDominators.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
@@ -18,10 +22,6 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
-
-#include "llvm/Analysis/LoopInfo.h"
-#include "llvm/Analysis/PostDominators.h"
-#include "llvm/IR/Dominators.h"
 
 STATISTIC(InvalidSlices,
           "Slices which contain branches with no post dominator.");
@@ -131,6 +131,97 @@ get_data_dependences_for(
   }
 
   return std::make_tuple(BBs, deps);
+}
+
+bool HasAddressTaken(const Instruction *AI, TypeSize AllocSize) {
+  const DataLayout &DL =
+      AI->getParent()->getParent()->getParent()->getDataLayout();
+  for (const User *U : AI->users()) {
+    const auto *I = cast<Instruction>(U);
+    // If this instruction accesses memory make sure it doesn't access beyond
+    // the bounds of the allocated object.
+    Optional<MemoryLocation> MemLoc = MemoryLocation::getOrNone(I);
+    if (MemLoc.hasValue() && MemLoc->Size.hasValue() &&
+        !TypeSize::isKnownGE(AllocSize,
+                             TypeSize::getFixed(MemLoc->Size.getValue())))
+      return true;
+    switch (I->getOpcode()) {
+    case Instruction::Store:
+      if (AI == cast<StoreInst>(I)->getValueOperand())
+        return true;
+      break;
+    case Instruction::AtomicCmpXchg:
+      // cmpxchg conceptually includes both a load and store from the same
+      // location. So, like store, the value being stored is what matters.
+      if (AI == cast<AtomicCmpXchgInst>(I)->getNewValOperand())
+        return true;
+      break;
+    case Instruction::PtrToInt:
+      if (AI == cast<PtrToIntInst>(I)->getOperand(0))
+        return true;
+      break;
+    case Instruction::Call: {
+      // Ignore intrinsics that do not become real instructions.
+      // TODO: Narrow this to intrinsics that have store-like effects.
+      const auto *CI = cast<CallInst>(I);
+      if (!CI->isDebugOrPseudoInst() && !CI->isLifetimeStartOrEnd())
+        return true;
+      break;
+    }
+    case Instruction::Invoke:
+      return true;
+    case Instruction::GetElementPtr: {
+      // If the GEP offset is out-of-bounds, or is non-constant and so has to be
+      // assumed to be potentially out-of-bounds, then any memory access that
+      // would use it could also be out-of-bounds meaning stack protection is
+      // required.
+      const GetElementPtrInst *GEP = cast<GetElementPtrInst>(I);
+      unsigned IndexSize = DL.getIndexTypeSizeInBits(I->getType());
+      APInt Offset(IndexSize, 0);
+      if (!GEP->accumulateConstantOffset(DL, Offset))
+        return true;
+      TypeSize OffsetSize = TypeSize::Fixed(Offset.getLimitedValue());
+      if (!TypeSize::isKnownGT(AllocSize, OffsetSize))
+        return true;
+      // Adjust AllocSize to be the space remaining after this offset.
+      // We can't subtract a fixed size from a scalable one, so in that case
+      // assume the scalable value is of minimum size.
+      TypeSize NewAllocSize =
+          TypeSize::Fixed(AllocSize.getKnownMinValue()) - OffsetSize;
+      if (HasAddressTaken(I, NewAllocSize))
+        return true;
+      break;
+    }
+    case Instruction::BitCast:
+    case Instruction::Select:
+    case Instruction::AddrSpaceCast:
+      if (HasAddressTaken(I, AllocSize))
+        return true;
+      break;
+    case Instruction::PHI: {
+      // Keep track of what PHI nodes we have already visited to ensure
+      // they are only visited once.
+      const auto *PN = cast<PHINode>(I);
+      if (HasAddressTaken(PN, AllocSize))
+        return true;
+      break;
+    }
+    case Instruction::Load:
+    case Instruction::AtomicRMW:
+    case Instruction::Ret:
+      // These instructions take an address operand, but have load-like or
+      // other innocuous behavior that should not trigger a stack protector.
+      // atomicrmw conceptually has both load and store semantics, but the
+      // value being stored must be integer; so if a pointer is being stored,
+      // we'll catch it in the PtrToInt case above.
+      break;
+    default:
+      // Conservatively return true for any instruction that takes an address
+      // operand, but is not handled above.
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -418,6 +509,16 @@ bool ProgramSlice::canOutline() {
                         << *I << "\n");
       return false;
     }
+    if (const AllocaInst *AI = dyn_cast<AllocaInst>(I)) {
+      const Module *M = AI->getParent()->getParent()->getParent();
+      if (HasAddressTaken(AI, M->getDataLayout().getTypeAllocSize(
+                                  AI->getAllocatedType()))) {
+        LLVM_DEBUG(
+            dbgs() << "Cannot outline slice because alloca has address taken:"
+                   << *AI << "\n");
+        return false;
+      }
+    }
   }
 
   if (LI.getLoopDepth(_CallSite->getParent()) > 0) {
@@ -650,6 +751,7 @@ std::tuple<Function *, PointerType *> ProgramSlice::outline() {
   std::string functionName =
       "_wyvern_slice_" + _initial->getParent()->getParent()->getName().str() +
       "_" + _initial->getName().str();
+  errs() << "Name: " << functionName << ", Ins: " << *_initial << "\n";
   Function *F =
       Function::Create(FT, Function::ExternalLinkage, functionName, M);
 
