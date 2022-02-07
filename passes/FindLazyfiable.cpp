@@ -2,6 +2,8 @@
 
 #include "FindLazyfiable.h"
 
+#include <map>
+
 using namespace llvm;
 
 /**

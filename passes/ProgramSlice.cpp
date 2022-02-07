@@ -2,6 +2,7 @@
 
 #include "ProgramSlice.h"
 
+#include <map>
 #include <queue>
 #include <set>
 #include <stack>
@@ -133,7 +134,7 @@ get_data_dependences_for(
   return std::make_tuple(BBs, deps);
 }
 
-bool HasAddressTaken(const Instruction *AI, TypeSize AllocSize) {
+bool hasAddressTaken(const Instruction *AI, TypeSize AllocSize) {
   const DataLayout &DL =
       AI->getParent()->getParent()->getParent()->getDataLayout();
   for (const User *U : AI->users()) {
@@ -164,7 +165,10 @@ bool HasAddressTaken(const Instruction *AI, TypeSize AllocSize) {
       // Ignore intrinsics that do not become real instructions.
       // TODO: Narrow this to intrinsics that have store-like effects.
       const auto *CI = cast<CallInst>(I);
-      if (!CI->isDebugOrPseudoInst() && !CI->isLifetimeStartOrEnd())
+      Function *Callee = CI->getCalledFunction();
+      bool isCalleePure = (Callee && Callee->onlyReadsMemory());
+      if (!CI->isDebugOrPseudoInst() && !CI->isLifetimeStartOrEnd() &&
+          !isCalleePure)
         return true;
       break;
     }
@@ -188,21 +192,21 @@ bool HasAddressTaken(const Instruction *AI, TypeSize AllocSize) {
       // assume the scalable value is of minimum size.
       TypeSize NewAllocSize =
           TypeSize::Fixed(AllocSize.getKnownMinValue()) - OffsetSize;
-      if (HasAddressTaken(I, NewAllocSize))
+      if (hasAddressTaken(I, NewAllocSize))
         return true;
       break;
     }
     case Instruction::BitCast:
     case Instruction::Select:
     case Instruction::AddrSpaceCast:
-      if (HasAddressTaken(I, AllocSize))
+      if (hasAddressTaken(I, AllocSize))
         return true;
       break;
     case Instruction::PHI: {
       // Keep track of what PHI nodes we have already visited to ensure
       // they are only visited once.
       const auto *PN = cast<PHINode>(I);
-      if (HasAddressTaken(PN, AllocSize))
+      if (hasAddressTaken(PN, AllocSize))
         return true;
       break;
     }
@@ -505,17 +509,16 @@ bool ProgramSlice::canOutline() {
   LoopInfo LI = LoopInfo(DT);
   for (const Instruction *I : _instsInSlice) {
     if (I->mayHaveSideEffects()) {
-      LLVM_DEBUG(dbgs() << "Cannot outline because inst may have side effects: "
-                        << *I << "\n");
+      errs() << "Cannot outline because inst may have side effects: " << *I
+             << "\n";
       return false;
     }
     if (const AllocaInst *AI = dyn_cast<AllocaInst>(I)) {
       const Module *M = AI->getParent()->getParent()->getParent();
-      if (HasAddressTaken(AI, M->getDataLayout().getTypeAllocSize(
+      if (hasAddressTaken(AI, M->getDataLayout().getTypeAllocSize(
                                   AI->getAllocatedType()))) {
-        LLVM_DEBUG(
-            dbgs() << "Cannot outline slice because alloca has address taken:"
-                   << *AI << "\n");
+        errs() << "Cannot outline slice because alloca has address taken:"
+               << *AI << "\n";
         return false;
       }
     }
@@ -524,9 +527,9 @@ bool ProgramSlice::canOutline() {
   if (LI.getLoopDepth(_CallSite->getParent()) > 0) {
     for (const BasicBlock *BB : _BBsInSlice) {
       if (LI.getLoopDepth(BB) <= LI.getLoopDepth(_CallSite->getParent())) {
-        LLVM_DEBUG(dbgs() << "BB " << BB->getName()
-                          << " is in same or lower loop depth as CallSite BB "
-                          << _CallSite->getParent()->getName() << "\n");
+        errs() << "BB " << BB->getName()
+               << " is in same or lower loop depth as CallSite BB "
+               << _CallSite->getParent()->getName() << "\n";
         return false;
       }
     }
@@ -697,9 +700,9 @@ void ProgramSlice::insertLoadForThunkParams(Function *F, bool memo) {
   IRBuilder<> builder(F->getContext());
 
   BasicBlock &entry = F->getEntryBlock();
-  Argument *thunk_struct = F->arg_begin();
+  Argument *thunkStructPtr = F->arg_begin();
 
-  assert(isa<PointerType>(thunk_struct->getType()) &&
+  assert(isa<PointerType>(thunkStructPtr->getType()) &&
          "Sliced function's first argument does not have struct pointer type!");
 
   builder.SetInsertPoint(&*(entry.getFirstInsertionPt()));
@@ -709,10 +712,13 @@ void ProgramSlice::insertLoadForThunkParams(Function *F, bool memo) {
   unsigned int i = memo ? 3 : 1;
   for (auto &arg : _depArgs) {
     Value *new_arg_addr = builder.CreateStructGEP(
-        thunk_struct, i, "_wyvern_arg_addr_" + arg->getName());
+        thunkStructPtr->getType()->getPointerElementType(), thunkStructPtr, i,
+        "_wyvern_arg_addr_" + arg->getName());
     Value *new_arg =
-        builder.CreateLoad(new_arg_addr, "_wyvern_arg_" + arg->getName());
-
+        builder.CreateLoad(thunkStructPtr->getType()
+                               ->getPointerElementType()
+                               ->getStructElementType(i),
+                           new_arg_addr, "_wyvern_arg_" + arg->getName());
     arg->replaceUsesWithIf(new_arg, [F](Use &U) {
       auto *UserI = dyn_cast<Instruction>(U.getUser());
       return UserI && UserI->getParent()->getParent() == F;
@@ -728,7 +734,7 @@ void ProgramSlice::insertLoadForThunkParams(Function *F, bool memo) {
  * encapsulates the computation of the original value in
  * regards to which the slice was created.
  */
-std::tuple<Function *, PointerType *> ProgramSlice::outline() {
+std::tuple<Function *, StructType *> ProgramSlice::outline() {
   Module *M = _initial->getParent()->getParent()->getParent();
   LLVMContext &Ctx = M->getContext();
 
@@ -751,7 +757,6 @@ std::tuple<Function *, PointerType *> ProgramSlice::outline() {
   std::string functionName =
       "_wyvern_slice_" + _initial->getParent()->getParent()->getName().str() +
       "_" + _initial->getName().str();
-  errs() << "Name: " << functionName << ", Ins: " << *_initial << "\n";
   Function *F =
       Function::Create(FT, Function::ExternalLinkage, functionName, M);
 
@@ -767,7 +772,7 @@ std::tuple<Function *, PointerType *> ProgramSlice::outline() {
   verifyFunction(*F);
   printFunctions(F);
 
-  return {F, thunkStructPtrType};
+  return {F, thunkStructType};
 }
 
 void ProgramSlice::addMemoizationCode(Function *F, ReturnInst *new_ret) {
@@ -790,13 +795,18 @@ void ProgramSlice::addMemoizationCode(Function *F, ReturnInst *new_ret) {
   Value *argValue = F->arg_begin();
   builder.SetInsertPoint(newEntry);
   Value *memoedValueGEP =
-      builder.CreateStructGEP(argValue, 1, "_wyvern_memo_val_addr");
-  LoadInst *memoedValueLoad =
-      builder.CreateLoad(memoedValueGEP, "_wyvern_memo_val");
+      builder.CreateStructGEP(argValue->getType()->getPointerElementType(),
+                              argValue, 1, "_wyvern_memo_val_addr");
+  LoadInst *memoedValueLoad = builder.CreateLoad(
+      argValue->getType()->getPointerElementType()->getStructElementType(1),
+      memoedValueGEP, "_wyvern_memo_val");
 
   Value *memoFlagGEP =
-      builder.CreateStructGEP(argValue, 2, "_wyvern_memo_flag_addr");
-  LoadInst *memoFlagLoad = builder.CreateLoad(memoFlagGEP, "_wyvern_memo_flag");
+      builder.CreateStructGEP(argValue->getType()->getPointerElementType(),
+                              argValue, 2, "_wyvern_memo_flag_addr");
+  LoadInst *memoFlagLoad = builder.CreateLoad(
+      argValue->getType()->getPointerElementType()->getStructElementType(2),
+      memoFlagGEP, "_wyvern_memo_flag");
 
   // add if (memoFlag == true) { return memo_val; }
   Value *toBool = builder.CreateTruncOrBitCast(
@@ -820,7 +830,7 @@ void ProgramSlice::addMemoizationCode(Function *F, ReturnInst *new_ret) {
  * code so that the function saves its evaluated value and
  * returns it on successive executions.
  */
-std::tuple<Function *, PointerType *> ProgramSlice::memoizedOutline() {
+std::tuple<Function *, StructType *> ProgramSlice::memoizedOutline() {
   Module *M = _initial->getParent()->getParent()->getParent();
   LLVMContext &Ctx = M->getContext();
 
@@ -860,9 +870,7 @@ std::tuple<Function *, PointerType *> ProgramSlice::memoizedOutline() {
   verifyFunction(*F);
   verifyFunction(*_initial->getParent()->getParent());
 
-  LLVM_DEBUG(dbgs() << "\n======== ORIGINAL FUNCTION ==========\n"
-                    << *_initial->getParent()->getParent());
-  LLVM_DEBUG(dbgs() << "\n======== SLICED FUNCTION ==========\n" << *F);
+  printFunctions(F);
 
-  return {F, thunkStructPtrType};
+  return {F, thunkStructType};
 }

@@ -6,6 +6,6 @@ struct WyvernLazyficationPass : public ModulePass {
 
   bool runOnModule(Module &);
   void getAnalysisUsage(AnalysisUsage &) const;
-  std::set<std::pair<Function*, Instruction*>> lazifiedFunctions;
+  std::set<std::pair<Function *, Instruction *>> lazifiedFunctions;
 };
 } // namespace llvm

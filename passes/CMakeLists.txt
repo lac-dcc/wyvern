@@ -5,10 +5,10 @@ add_library(Wyvern MODULE
 	Lazyfication.cpp
 )
 
-target_compile_features(Wyvern PRIVATE cxx_range_for cxx_auto_type)
+target_compile_features(Wyvern PRIVATE cxx_std_17)
 
 set_target_properties(Wyvern PROPERTIES
-	COMPILE_FLAGS "-fno-rtti"
+	COMPILE_FLAGS "-fno-rtti -g -O3"
 )
 
 

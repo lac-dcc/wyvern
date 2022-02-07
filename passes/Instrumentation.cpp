@@ -2,6 +2,8 @@
 
 #include "Instrumentation.h"
 
+#include <map>
+
 using namespace llvm;
 
 static cl::opt<bool> WyvernInstrumentAll(
