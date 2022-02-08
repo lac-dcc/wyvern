@@ -365,8 +365,10 @@ void ProgramSlice::rerouteBranches(Function *F) {
 
   // Add an unreachable block to be the target of branches that should
   // be removed.
-  BasicBlock *unreachableBlock = BasicBlock::Create(F->getContext(), "_wyvern_unreachable", F);
-  UnreachableInst *unreach = new UnreachableInst(F->getContext(), unreachableBlock);
+  BasicBlock *unreachableBlock =
+      BasicBlock::Create(F->getContext(), "_wyvern_unreachable", F);
+  UnreachableInst *unreach =
+      new UnreachableInst(F->getContext(), unreachableBlock);
 
   // Now iterate over every block in the slice...
   for (BasicBlock &BB : *F) {
@@ -378,7 +380,7 @@ void ProgramSlice::rerouteBranches(Function *F) {
               dyn_cast<BranchInst>(parentBB->getTerminator())) {
         for (const BasicBlock *suc : origBranch->successors()) {
           BasicBlock *newTarget = _origToNewBBmap[_attractors[suc]];
-          if (!newTarget ) {
+          if (!newTarget) {
             continue;
           }
           BranchInst::Create(newTarget, &BB);
@@ -420,8 +422,12 @@ void ProgramSlice::rerouteBranches(Function *F) {
           }
           const BasicBlock *attractor = _attractors[suc];
           BasicBlock *newSucc = _origToNewBBmap[attractor];
-          
+
           if (!newSucc) {
+            suc->replaceUsesWithIf(unreachableBlock, [F](Use &U) {
+              auto *UserI = dyn_cast<Instruction>(U.getUser());
+              return UserI && UserI->getParent()->getParent() == F;
+            });
             BI->setSuccessor(idx, unreachableBlock);
             continue;
           }
@@ -445,6 +451,10 @@ void ProgramSlice::rerouteBranches(Function *F) {
           BasicBlock *newSucc = _origToNewBBmap[attractor];
 
           if (!newSucc) {
+            suc->replaceUsesWithIf(unreachableBlock, [F](Use &U) {
+              auto *UserI = dyn_cast<Instruction>(U.getUser());
+              return UserI && UserI->getParent()->getParent() == F;
+            });
             SI->setSuccessor(idx, unreachableBlock);
             continue;
           }

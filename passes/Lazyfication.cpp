@@ -1,14 +1,17 @@
-#define DEBUG_TYPE "WyvernLazyficationPass"
-
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 
 #include "FindLazyfiable.h"
 #include "Lazyfication.h"
 #include "ProgramSlice.h"
+
+#define DEBUG_TYPE "WyvernLazyficationPass"
 
 STATISTIC(NumCallsitesLazified,
           "The number of callsites whose arguments were lazified.");
@@ -42,6 +45,26 @@ static unsigned int getNumberOfInsts(Function &F) {
     }
   }
   return size;
+}
+
+void removeAttributesFromThunkArgument(Value &V, unsigned int index) {
+  AttributeMask toRemove;
+
+  toRemove.addAttribute(Attribute::SExt);
+  toRemove.addAttribute(Attribute::ZExt);
+  toRemove.addAttribute(Attribute::NoAlias);
+  toRemove.addAttribute(Attribute::ByRef);
+  toRemove.addAttribute(Attribute::NoAlias);
+  toRemove.addAttribute(Attribute::NoCapture);
+  toRemove.addAttribute(Attribute::ByVal);
+  toRemove.addAttribute(Attribute::ReadOnly);
+  toRemove.addAttribute(Attribute::WriteOnly);
+
+  if (CallInst *CI = dyn_cast<CallInst>(&V)) {
+    CI->removeParamAttrs(index, toRemove);
+  } else if (Function *F = dyn_cast<Function>(&V)) {
+    F->removeParamAttrs(index, toRemove);
+  }
 }
 
 void updateThunkArgUses(Function *F, Argument *optimizedArg,
@@ -157,9 +180,9 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, int index,
   IRBuilder<> builder(M.getContext());
   builder.SetInsertPoint(&CI);
 
-  Function *thunkFunction;
+  Function *thunkFunction, *newCallee;
+  AllocaInst *thunkAlloca;
   StructType *thunkStructType;
-  Function *newCallee;
   if (WyvernLazificationMemoization) {
     std::tie(thunkFunction, thunkStructType) = slice.memoizedOutline();
 
@@ -171,7 +194,7 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, int index,
     //   arg1 = y
     //   ...
     // }
-    AllocaInst *thunkAlloca =
+    thunkAlloca =
         builder.CreateAlloca(thunkStructType, nullptr, "_wyvern_thunk_alloca");
     Value *thunkFPtrGEP =
         builder.CreateStructGEP(thunkAlloca->getType()->getPointerElementType(),
@@ -190,12 +213,6 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, int index,
       builder.CreateStore(arg, thunkArgGEP);
       ++i;
     }
-
-    newCallee =
-        cloneCalleeFunction(*callee, index, *thunkFunction, thunkAlloca, M);
-
-    CI.setCalledFunction(newCallee);
-    CI.setArgOperand(index, thunkAlloca);
   } else {
     std::tie(thunkFunction, thunkStructType) = slice.outline();
 
@@ -206,7 +223,7 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, int index,
     //   arg1 = y
     //   ...
     // }
-    AllocaInst *thunkAlloca =
+    thunkAlloca =
         builder.CreateAlloca(thunkStructType, nullptr, "_wyvern_thunk_alloca");
     Value *thunkFPtrGEP =
         builder.CreateStructGEP(thunkAlloca->getType()->getPointerElementType(),
@@ -221,12 +238,14 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, int index,
       builder.CreateStore(arg, thunkArgGEP);
       ++i;
     }
-
-    newCallee =
-        cloneCalleeFunction(*callee, index, *thunkFunction, thunkAlloca, M);
-    CI.setCalledFunction(newCallee);
-    CI.setArgOperand(index, thunkAlloca);
   }
+
+  newCallee =
+      cloneCalleeFunction(*callee, index, *thunkFunction, thunkAlloca, M);
+  CI.setCalledFunction(newCallee);
+  CI.setArgOperand(index, thunkAlloca);
+  removeAttributesFromThunkArgument(CI, index);
+  removeAttributesFromThunkArgument(*newCallee, index);
 
   unsigned int sliceSize = getNumberOfInsts(*thunkFunction);
   TotalSliceSize += sliceSize;
@@ -264,7 +283,15 @@ bool WyvernLazyficationPass::runOnModule(Module &M) {
 void WyvernLazyficationPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<FindLazyfiableAnalysis>();
   AU.addRequired<LoopInfoWrapperPass>();
+  AU.addRequired<CallGraphWrapperPass>();
 }
+
+static llvm::RegisterStandardPasses RegisterWyvernLazification(
+    llvm::PassManagerBuilder::EP_ModuleOptimizerEarly,
+    [](const llvm::PassManagerBuilder &Builder,
+       llvm::legacy::PassManagerBase &PM) {
+      PM.add(new WyvernLazyficationPass());
+    });
 
 char WyvernLazyficationPass::ID = 0;
 static RegisterPass<WyvernLazyficationPass>
