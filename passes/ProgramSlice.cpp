@@ -342,50 +342,6 @@ void ProgramSlice::addDomBranches(DomTreeNode *cur, DomTreeNode *parent,
   }
 }
 
-bool ProgramSlice::hasUniqueAttractor(Instruction *terminator) {
-  int num_attractors = 0;
-  if (BranchInst *BI = dyn_cast<BranchInst>(terminator)) {
-    for (const BasicBlock *succ : BI->successors()) {
-      const BasicBlock *attractor = _attractors[succ];
-      if (attractor) {
-        num_attractors++;
-      }
-    }
-  } else if (SwitchInst *SI = dyn_cast<SwitchInst>(terminator)) {
-    for (auto &switchCase : SI->cases()) {
-      const BasicBlock *succ = switchCase.getCaseSuccessor();
-      const BasicBlock *attractor = _attractors[succ];
-      if (attractor) {
-        num_attractors++;
-      }
-    }
-  }
-  return num_attractors == 1;
-}
-
-const BasicBlock *ProgramSlice::getUniqueAttractor(Instruction *terminator) {
-  if (BranchInst *BI = dyn_cast<BranchInst>(terminator)) {
-    for (const BasicBlock *succ : BI->successors()) {
-      const BasicBlock *attractor = _attractors[succ];
-      if (attractor) {
-        return attractor;
-      }
-    }
-  } else if (SwitchInst *SI = dyn_cast<SwitchInst>(terminator)) {
-    for (auto &switchCase : SI->cases()) {
-      const BasicBlock *succ = switchCase.getCaseSuccessor();
-      const BasicBlock *attractor = _attractors[succ];
-      if (attractor) {
-        return attractor;
-      }
-    }
-  }
-
-  assert(true &&
-         "Terminator instruction does not have attractor for successors!");
-  return nullptr;
-}
-
 void ProgramSlice::rerouteBranches(Function *F) {
   DominatorTree DT(*_parentFunction);
   std::set<DomTreeNode *> visited;
@@ -407,6 +363,11 @@ void ProgramSlice::rerouteBranches(Function *F) {
   // modify in-place.
   std::map<PHINode *, std::pair<BasicBlock *, BasicBlock *>> PHIsToUpdate;
 
+  // Add an unreachable block to be the target of branches that should
+  // be removed.
+  BasicBlock *unreachableBlock = BasicBlock::Create(F->getContext(), "_wyvern_unreachable", F);
+  UnreachableInst *unreach = new UnreachableInst(F->getContext(), unreachableBlock);
+
   // Now iterate over every block in the slice...
   for (BasicBlock &BB : *F) {
     // If block still has no terminator, create an unconditional branch routing
@@ -417,69 +378,61 @@ void ProgramSlice::rerouteBranches(Function *F) {
               dyn_cast<BranchInst>(parentBB->getTerminator())) {
         for (const BasicBlock *suc : origBranch->successors()) {
           BasicBlock *newTarget = _origToNewBBmap[_attractors[suc]];
-          if (newTarget != nullptr) {
-            BranchInst::Create(newTarget, &BB);
-            // If new successor has any PHINodes that merged a path from a block
-            // that was dominated by this block, update its incoming block to
-            // be this instead.
-            for (Instruction &I : *newTarget) {
-              if (!isa<PHINode>(I)) {
-                continue;
-              }
-              PHINode *phi = cast<PHINode>(&I);
-              for (BasicBlock *newTargetPHIBB : phi->blocks()) {
-                if (newTargetPHIBB->getParent() != F) {
-                  DomTreeNode *OrigBB = DT.getNode(newTargetPHIBB);
-                  DomTreeNode *Cand = OrigBB->getIDom();
-                  while (Cand != nullptr) {
-                    if (Cand->getBlock() == parentBB) {
-                      break;
-                    }
-                    Cand = Cand->getIDom();
+          if (!newTarget ) {
+            continue;
+          }
+          BranchInst::Create(newTarget, &BB);
+          // If new successor has any PHINodes that merged a path from a block
+          // that was dominated by this block, update its incoming block to
+          // be this instead.
+          for (Instruction &I : *newTarget) {
+            if (!isa<PHINode>(I)) {
+              continue;
+            }
+            PHINode *phi = cast<PHINode>(&I);
+            for (BasicBlock *newTargetPHIBB : phi->blocks()) {
+              if (newTargetPHIBB->getParent() != F) {
+                DomTreeNode *OrigBB = DT.getNode(newTargetPHIBB);
+                DomTreeNode *Cand = OrigBB->getIDom();
+                while (Cand != nullptr) {
+                  if (Cand->getBlock() == parentBB) {
+                    break;
                   }
-                  if (Cand) {
-                    phi->replaceIncomingBlockWith(newTargetPHIBB, &BB);
-                  }
+                  Cand = Cand->getIDom();
+                }
+                if (Cand) {
+                  phi->replaceIncomingBlockWith(newTargetPHIBB, &BB);
                 }
               }
             }
-            break;
           }
+          break;
         }
       }
     } else {
       // Otherwise, the block's original branch was part of the slice...
       Instruction *term = BB.getTerminator();
       if (BranchInst *BI = dyn_cast<BranchInst>(term)) {
-        if (hasUniqueAttractor(BI)) {
-          // If the block has a unique attractor in the slice, make it so its
-          // branch is now unconditional, and branches directly to its
-          // attractor.
-          const BasicBlock *attractor = getUniqueAttractor(BI);
-          BasicBlock *newTarget = _origToNewBBmap[attractor];
-          if (Instruction *cond = dyn_cast<Instruction>(BI->getCondition())) {
-            cond->replaceAllUsesWith(UndefValue::get(cond->getType()));
-            cond->eraseFromParent();
+        for (unsigned int idx = 0; idx < BI->getNumSuccessors(); ++idx) {
+          BasicBlock *suc = BI->getSuccessor(idx);
+          if (suc->getParent() == F) {
+            continue;
           }
-          BranchInst *newBr = BranchInst::Create(newTarget, &BB);
-          BI->replaceAllUsesWith(newBr);
-          BI->eraseFromParent();
-        } else {
-          for (unsigned int idx = 0; idx < BI->getNumSuccessors(); ++idx) {
-            BasicBlock *suc = BI->getSuccessor(idx);
-            if (suc->getParent() == F) {
+          const BasicBlock *attractor = _attractors[suc];
+          BasicBlock *newSucc = _origToNewBBmap[attractor];
+          
+          if (!newSucc) {
+            BI->setSuccessor(idx, unreachableBlock);
+            continue;
+          }
+
+          BI->setSuccessor(idx, newSucc);
+          for (Instruction &I : *newSucc) {
+            if (!isa<PHINode>(I)) {
               continue;
             }
-            const BasicBlock *attractor = _attractors[suc];
-            BasicBlock *newSucc = _origToNewBBmap[attractor];
-            BI->setSuccessor(idx, newSucc);
-            for (Instruction &I : *newSucc) {
-              if (!isa<PHINode>(I)) {
-                continue;
-              }
-              PHINode *phi = cast<PHINode>(&I);
-              phi->replaceIncomingBlockWith(suc, &BB);
-            }
+            PHINode *phi = cast<PHINode>(&I);
+            phi->replaceIncomingBlockWith(suc, &BB);
           }
         }
       } else if (SwitchInst *SI = dyn_cast<SwitchInst>(term)) {
@@ -490,6 +443,12 @@ void ProgramSlice::rerouteBranches(Function *F) {
           }
           const BasicBlock *attractor = _attractors[suc];
           BasicBlock *newSucc = _origToNewBBmap[attractor];
+
+          if (!newSucc) {
+            SI->setSuccessor(idx, unreachableBlock);
+            continue;
+          }
+
           SI->setSuccessor(idx, newSucc);
           for (Instruction &I : *newSucc) {
             if (!isa<PHINode>(I)) {
