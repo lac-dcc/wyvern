@@ -44,7 +44,7 @@ int maybe_use_arg(int data) {
 
 int main(int argc, char *argv[]) {
 	if (argc != 2) {
-		fprintf(stderr, "Usage: ./%s <value1>\n", argv[0]);
+		fprintf(stderr, "Usage: %s <value1>\n", argv[0]);
 		return 0;
 	}
 	return optimizable(atoi(argv[1]));
