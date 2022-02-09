@@ -3,6 +3,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/Support/RandomNumberGenerator.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -122,9 +123,13 @@ Function *cloneCalleeFunction(Function &Callee, int index,
   }
   argTypes[index] = thunkArg->getType();
 
+  std::unique_ptr<RandomNumberGenerator> RNG = M.createRNG("wyvern");
+  unsigned int random_num = (RNG->operator()() % 1000);
+
   FunctionType *FT = FunctionType::get(Callee.getReturnType(), argTypes, false);
   std::string functionName = "_wyvern_calleeclone_" + Callee.getName().str() +
-                             "_" + std::to_string(index);
+                             "_" + std::to_string(index) +
+                             std::to_string(random_num);
   Function *newCallee =
       Function::Create(FT, Function::ExternalLinkage, functionName, M);
 
@@ -143,9 +148,7 @@ Function *cloneCalleeFunction(Function &Callee, int index,
   SmallVector<ReturnInst *, 4> Returns;
   CloneFunctionInto(newCallee, &Callee, vMap,
                     CloneFunctionChangeType::LocalChangesOnly, Returns);
-
   updateThunkArgUses(newCallee, newCallee->getArg(index), &slicedFunction);
-
   verifyFunction(*newCallee);
 
   return newCallee;

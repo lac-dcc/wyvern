@@ -22,6 +22,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/RandomNumberGenerator.h"
 #include "llvm/Support/raw_ostream.h"
 
 STATISTIC(InvalidSlices,
@@ -723,9 +724,12 @@ std::tuple<Function *, StructType *> ProgramSlice::outline() {
   FunctionType *FT =
       FunctionType::get(_initial->getType(), {thunkStructPtrType}, false);
 
+  std::unique_ptr<RandomNumberGenerator> RNG = M->createRNG("wyvern");
+  unsigned int random_num = (RNG->operator()() % 1000);
+
   std::string functionName =
       "_wyvern_slice_" + _initial->getParent()->getParent()->getName().str() +
-      "_" + _initial->getName().str();
+      "_" + _initial->getName().str() + std::to_string(random_num);
   Function *F =
       Function::Create(FT, Function::ExternalLinkage, functionName, M);
 
@@ -818,10 +822,12 @@ std::tuple<Function *, StructType *> ProgramSlice::memoizedOutline() {
   thunkStructType->setBody(thunkTypes);
   thunkStructType->setName("_wyvern_thunk_type");
 
+  std::unique_ptr<RandomNumberGenerator> RNG = M->createRNG("wyvern");
+  unsigned int random_num = (RNG->operator()() % 1000);
   std::string functionName =
       "_wyvern_slice_memo_" +
       _initial->getParent()->getParent()->getName().str() + "_" +
-      _initial->getName().str();
+      _initial->getName().str() + std::to_string(random_num);
   Function *F = Function::Create(thunkFunctionType, Function::ExternalLinkage,
                                  functionName, M);
 
