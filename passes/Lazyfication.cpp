@@ -3,7 +3,6 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Verifier.h"
-#include "llvm/Support/RandomNumberGenerator.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -11,6 +10,8 @@
 #include "FindLazyfiable.h"
 #include "Lazyfication.h"
 #include "ProgramSlice.h"
+
+#include <random>
 
 #define DEBUG_TYPE "WyvernLazyficationPass"
 
@@ -123,8 +124,10 @@ Function *cloneCalleeFunction(Function &Callee, int index,
   }
   argTypes[index] = thunkArg->getType();
 
-  std::unique_ptr<RandomNumberGenerator> RNG = M.createRNG("wyvern");
-  unsigned int random_num = (RNG->operator()() % 1000);
+  std::random_device rd;
+  std::mt19937 mt(rd());
+  std::uniform_int_distribution<int64_t> dist(1, 100000);
+  uint64_t random_num = dist(mt);
 
   FunctionType *FT = FunctionType::get(Callee.getReturnType(), argTypes, false);
   std::string functionName = "_wyvern_calleeclone_" + Callee.getName().str() +

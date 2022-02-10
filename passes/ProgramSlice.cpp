@@ -22,8 +22,9 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Debug.h"
-#include "llvm/Support/RandomNumberGenerator.h"
 #include "llvm/Support/raw_ostream.h"
+
+#include <random>
 
 STATISTIC(InvalidSlices,
           "Slices which contain branches with no post dominator.");
@@ -724,8 +725,10 @@ std::tuple<Function *, StructType *> ProgramSlice::outline() {
   FunctionType *FT =
       FunctionType::get(_initial->getType(), {thunkStructPtrType}, false);
 
-  std::unique_ptr<RandomNumberGenerator> RNG = M->createRNG("wyvern");
-  unsigned int random_num = (RNG->operator()() % 1000);
+  std::random_device rd;
+  std::mt19937 mt(rd());
+  std::uniform_int_distribution<int64_t> dist(1, 100000);
+  uint64_t random_num = dist(mt);
 
   std::string functionName =
       "_wyvern_slice_" + _initial->getParent()->getParent()->getName().str() +
@@ -822,8 +825,11 @@ std::tuple<Function *, StructType *> ProgramSlice::memoizedOutline() {
   thunkStructType->setBody(thunkTypes);
   thunkStructType->setName("_wyvern_thunk_type");
 
-  std::unique_ptr<RandomNumberGenerator> RNG = M->createRNG("wyvern");
-  unsigned int random_num = (RNG->operator()() % 1000);
+  std::random_device rd;
+  std::mt19937 mt(rd());
+  std::uniform_int_distribution<int64_t> dist(1, 100000);
+  uint64_t random_num = dist(mt);
+  
   std::string functionName =
       "_wyvern_slice_memo_" +
       _initial->getParent()->getParent()->getName().str() + "_" +
