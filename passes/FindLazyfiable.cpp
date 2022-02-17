@@ -2,6 +2,13 @@
 
 #include "FindLazyfiable.h"
 
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/Transforms/IPO/FunctionAttrs.h"
+#include "llvm/Transforms/Utils/LCSSA.h"
+#include "llvm/Transforms/Utils/LoopSimplify.h"
+#include "llvm/Transforms/Utils/Mem2Reg.h"
+#include "llvm/Transforms/Utils/UnifyFunctionExitNodes.h"
+
 #include <map>
 
 using namespace llvm;
@@ -195,7 +202,48 @@ std::set<Function *> FindLazyfiableAnalysis::addMissingUses(Module &M,
   return dummyFunctions;
 }
 
+/**
+ * To find the most optimization opportunities, we require the IR to have been
+ * transformed by the following passes: 
+ *   -mem2reg ->        promotes memory to registers
+ *   -function-attrs -> infers attributes for functions (such asreadonly)
+ *   -lcssa ->          transforms the program to loop-ssa form
+ *   -loop-simplify ->  simplifies loops to cannonical forms
+ *   -mergereturn ->    merges multiple function returns into one
+ *
+ * While it is easy enough to do so from `opt`, when running from `clang` we
+ * cannot manipulate when/which passes run, therefore, we run them here manually
+ * to guarantee that the IR is in the format we expect.
+ */
+void runRequiredPasses(Module &M) {
+  LoopAnalysisManager LAM;
+  FunctionAnalysisManager FAM;
+  CGSCCAnalysisManager CGAM;
+  ModuleAnalysisManager MAM;
+  PassBuilder PB;
+
+  PB.registerModuleAnalyses(MAM);
+  PB.registerCGSCCAnalyses(CGAM);
+  PB.registerFunctionAnalyses(FAM);
+  PB.registerLoopAnalyses(LAM);
+  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
+
+  ModulePassManager MPM =
+      PB.buildO0DefaultPipeline(llvm::OptimizationLevel::O0);
+
+  MPM.addPass(createModuleToFunctionPassAdaptor(PromotePass()));
+  MPM.addPass(createModuleToFunctionPassAdaptor(LCSSAPass()));
+  MPM.addPass(createModuleToFunctionPassAdaptor(LoopSimplifyPass()));
+  MPM.addPass(
+      createModuleToPostOrderCGSCCPassAdaptor(PostOrderFunctionAttrsPass()));
+  MPM.addPass(createModuleToFunctionPassAdaptor(UnifyFunctionExitNodesPass()));
+
+  MPM.run(M, MAM);
+}
+
 bool FindLazyfiableAnalysis::runOnModule(Module &M) {
+  runRequiredPasses(M);
+
   std::set<Function *> dummyFunctions = addMissingUses(M, M.getContext());
 
   for (Function &F : M) {

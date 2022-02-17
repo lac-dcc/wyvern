@@ -14,6 +14,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/PostDominators.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -344,6 +345,23 @@ void ProgramSlice::addDomBranches(DomTreeNode *cur, DomTreeNode *parent,
   }
 }
 
+void updatePHINodes(Function *F) {
+  for (BasicBlock &BB : *F) {
+    std::set<BasicBlock *> preds(pred_begin(&BB), pred_end(&BB));
+    for (Instruction &I : BB) {
+      if (!isa<PHINode>(&I)) {
+        continue;
+      }
+      PHINode *PN = cast<PHINode>(&I);
+      for (BasicBlock *incBB : PN->blocks()) {
+        if (!preds.count(incBB)) {
+          PN->removeIncomingValue(incBB);
+        }
+      }
+    }
+  }
+}
+
 void ProgramSlice::rerouteBranches(Function *F) {
   DominatorTree DT(*_parentFunction);
   std::set<DomTreeNode *> visited;
@@ -473,6 +491,14 @@ void ProgramSlice::rerouteBranches(Function *F) {
       }
     }
   }
+
+  // If unreachable block was never used, remove it so we avoid mistaking it
+  // as a potential entry block (due to it having no predecessors)
+  if (unreachableBlock->hasNPredecessors(0)) {
+    unreachableBlock->eraseFromParent();
+  }
+
+  updatePHINodes(F);
 }
 
 bool ProgramSlice::canOutline() {
@@ -829,7 +855,7 @@ std::tuple<Function *, StructType *> ProgramSlice::memoizedOutline() {
   std::mt19937 mt(rd());
   std::uniform_int_distribution<int64_t> dist(1, 100000);
   uint64_t random_num = dist(mt);
-  
+
   std::string functionName =
       "_wyvern_slice_memo_" +
       _initial->getParent()->getParent()->getName().str() + "_" +

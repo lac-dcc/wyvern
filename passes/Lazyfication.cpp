@@ -4,6 +4,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 
@@ -290,6 +291,7 @@ void WyvernLazyficationPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<FindLazyfiableAnalysis>();
   AU.addRequired<LoopInfoWrapperPass>();
   AU.addRequired<CallGraphWrapperPass>();
+  AU.addRequired<DominatorTreeWrapperPass>();
 }
 
 static llvm::RegisterStandardPasses RegisterWyvernLazification(
