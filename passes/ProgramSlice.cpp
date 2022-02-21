@@ -272,6 +272,7 @@ void ProgramSlice::printSlice() {
                     << _parentFunction->getName() << " with size "
                     << _parentFunction->size() << " in instruction" << *_initial
                     << " ====\n");
+  LLVM_DEBUG(dbgs() << "==== Call site: " << *_CallSite << " ====\n");
   LLVM_DEBUG(dbgs() << "BBs in slice:\n");
   for (const BasicBlock *BB : _BBsInSlice) {
     LLVM_DEBUG(dbgs() << "\t" << BB->getName() << "\n");
@@ -345,17 +346,26 @@ void ProgramSlice::addDomBranches(DomTreeNode *cur, DomTreeNode *parent,
   }
 }
 
+/* When cloning PHINodes from the original function, some PHIs may have leftover
+ * incoming blocks which were not included in the slice. Therefore, these blocks
+ * are now invalid, as they are not predecessors of the new PHI. This function
+ * removes these. */
 void updatePHINodes(Function *F) {
   for (BasicBlock &BB : *F) {
     std::set<BasicBlock *> preds(pred_begin(&BB), pred_end(&BB));
-    for (Instruction &I : BB) {
-      if (!isa<PHINode>(&I)) {
-        continue;
+    for (auto I_it = BB.begin(); I_it != BB.end();) {
+      PHINode *PN = dyn_cast<PHINode>(I_it);
+      if (!PN) {
+        break;
       }
-      PHINode *PN = cast<PHINode>(&I);
-      for (BasicBlock *incBB : PN->blocks()) {
-        if (!preds.count(incBB)) {
+      ++I_it;
+      for (auto it = PN->block_begin(); it != PN->block_end(); ++it) {
+        BasicBlock *incBB = *it;
+        if (incBB && !preds.count(incBB)) {
           PN->removeIncomingValue(incBB);
+        }
+        if (PN->getNumIncomingValues() == 0) {
+          break;
         }
       }
     }
@@ -537,6 +547,19 @@ bool ProgramSlice::canOutline() {
         (dbgs()
          << "Cannot outline slice due to slicing criteria being an alloca!\n"));
     return false;
+  }
+
+  /* LCSSA may insert PHINodes with only a single incoming block. In some cases,
+   * these PHINodes can be added into the slice, but the conditional for the
+   * loop that generated them is not. When eliminating the PHINode, we'd
+   * generate invalid code, so we avoid optimizing these cases temporarily. */
+  if (PHINode *PN = dyn_cast<PHINode>(_initial)) {
+    if (PN->getNumIncomingValues() == 1) {
+      BasicBlock *incBB = PN->getIncomingBlock(0);
+      if (_instsInSlice.count(incBB->getTerminator()) == 0) {
+        return false;
+      }
+    }
   }
 
   return true;
@@ -753,7 +776,7 @@ std::tuple<Function *, StructType *> ProgramSlice::outline() {
 
   std::random_device rd;
   std::mt19937 mt(rd());
-  std::uniform_int_distribution<int64_t> dist(1, 100000);
+  std::uniform_int_distribution<int64_t> dist(1, 1000000000);
   uint64_t random_num = dist(mt);
 
   std::string functionName =
@@ -853,7 +876,7 @@ std::tuple<Function *, StructType *> ProgramSlice::memoizedOutline() {
 
   std::random_device rd;
   std::mt19937 mt(rd());
-  std::uniform_int_distribution<int64_t> dist(1, 100000);
+  std::uniform_int_distribution<int64_t> dist(1, 1000000000);
   uint64_t random_num = dist(mt);
 
   std::string functionName =

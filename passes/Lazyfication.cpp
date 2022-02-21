@@ -127,7 +127,7 @@ Function *cloneCalleeFunction(Function &Callee, int index,
 
   std::random_device rd;
   std::mt19937 mt(rd());
-  std::uniform_int_distribution<int64_t> dist(1, 100000);
+  std::uniform_int_distribution<int64_t> dist(1, 1000000000);
   uint64_t random_num = dist(mt);
 
   FunctionType *FT = FunctionType::get(Callee.getReturnType(), argTypes, false);
