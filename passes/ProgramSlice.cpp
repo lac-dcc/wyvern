@@ -515,11 +515,24 @@ bool ProgramSlice::canOutline() {
   DominatorTree DT(*_parentFunction);
   LoopInfo LI = LoopInfo(DT);
   for (const Instruction *I : _instsInSlice) {
-    if (I->mayHaveSideEffects()) {
-      errs() << "Cannot outline because inst may have side effects: " << *I
+    if (I->mayThrow()) {
+      errs() << "Cannot outline because inst may have throw: " << *I
              << "\n";
       return false;
     }
+
+    else if (I->mayWriteToMemory()) {
+      errs() << "Cannot outline because inst may write to memory: " << *I
+             << "\n";
+      return false;
+    }
+
+    else if (!I->willReturn()) {
+      errs() << "Cannot outline because inst may not return: " << *I
+             << "\n";
+      return false;
+    }
+
     if (const AllocaInst *AI = dyn_cast<AllocaInst>(I)) {
       const Module *M = AI->getParent()->getParent()->getParent();
       if (hasAddressTaken(AI, M->getDataLayout().getTypeAllocSize(
