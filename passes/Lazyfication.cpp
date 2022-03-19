@@ -34,11 +34,6 @@ static cl::opt<bool> WyvernLazificationMemoization(
     cl::desc(
         "Wyvern - Enable memoization in Lazyfication (implement call-by-need"
         "rather than call-by-name)."));
-static cl::opt<bool> WyvernLazyficationDebuggingInstrumentation(
-    "wylazy-debug", cl::init(false),
-    cl::desc("Wyvern - Enable debugging in Lazyfication. This inserts calls"
-             "to printf that track when slices are executed."
-             "CURRENTLY UNIMPLEMENTED!"));
 
 static unsigned int getNumberOfInsts(Function &F) {
   unsigned int size = 0;
