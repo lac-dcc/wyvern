@@ -16,4 +16,10 @@ if (${LLVM_VERSION_MAJOR} VERSION_GREATER_EQUAL 10)
 	set(CMAKE_CXX_STANDARD 17)
 endif ()
 
+find_package(Boost REQUIRED COMPONENTS system)
+include_directories(${Boost_INCLUDE_DIRS})
+add_library(wyinstr SHARED wyinstr.cpp)
+target_link_libraries(wyinstr ${Boost_LIBRARIES})
+target_link_options(wyinstr PUBLIC -static-libstdc++)
+
 add_subdirectory(passes)

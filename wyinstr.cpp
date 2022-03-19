@@ -87,7 +87,7 @@ boost::recursive_mutex wyinstr_mutex;
 
 extern "C" void __attribute__((noinline))
 _wyinstr_init_call(char *fun_name, int64_t callinstr_id, int8_t num_args) {
-  boost::recursive_mutex::scoped_lock(wyinstr_mutex);
+  boost::recursive_mutex::scoped_lock lock(wyinstr_mutex);
   if (initialized == false && strcmp(fun_name, "main") == 0) {
     initialized = true;
   }
@@ -120,7 +120,7 @@ _wyinstr_init_call(char *fun_name, int64_t callinstr_id, int8_t num_args) {
 
 extern "C" __attribute__((noinline)) void _wyinstr_mark_eval(int8_t arg_index,
                                                              int64_t *bits) {
-  boost::recursive_mutex::scoped_lock(wyinstr_mutex);
+  boost::recursive_mutex::scoped_lock lock(wyinstr_mutex);
   if (!initialized) {
     return;
   }
@@ -154,7 +154,7 @@ extern "C" __attribute__((noinline)) int64_t _wyinstr_initbits() {
 }
 
 extern "C" __attribute__((noinline)) void _wyinstr_end_call() {
-  boost::recursive_mutex::scoped_lock(wyinstr_mutex);
+  boost::recursive_mutex::scoped_lock lock(wyinstr_mutex);
 #ifdef DEBUG
   fprintf(stderr, "Ending call from callsite <%s, %li>.\n",
           call_stack.top().first, call_stack.top().second);
@@ -169,7 +169,7 @@ extern "C" __attribute__((noinline)) void _wyinstr_end_call() {
 }
 
 extern "C" __attribute__((noinline)) void _wyinstr_dump() {
-  boost::recursive_mutex::scoped_lock(wyinstr_mutex);
+  boost::recursive_mutex::scoped_lock lock(wyinstr_mutex);
   FILE *outfile = fopen("wyinstr_output.csv", "w");
   fprintf(outfile, "fun_name,call_id,num_args,unique_evals,total_evals\n");
   for (auto &[key, value] : profile_info) {
