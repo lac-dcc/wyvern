@@ -516,8 +516,7 @@ bool ProgramSlice::canOutline() {
   LoopInfo LI = LoopInfo(DT);
   for (const Instruction *I : _instsInSlice) {
     if (I->mayThrow()) {
-      errs() << "Cannot outline because inst may have throw: " << *I
-             << "\n";
+      errs() << "Cannot outline because inst may have throw: " << *I << "\n";
       return false;
     }
 
@@ -528,8 +527,7 @@ bool ProgramSlice::canOutline() {
     }
 
     else if (!I->willReturn()) {
-      errs() << "Cannot outline because inst may not return: " << *I
-             << "\n";
+      errs() << "Cannot outline because inst may not return: " << *I << "\n";
       return false;
     }
 
