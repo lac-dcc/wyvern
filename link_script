@@ -1,0 +1,10 @@
+VERS_1.0 {
+	global:
+	_wyinstr_init_prof;
+	_wyinstr_init_call;
+	_wyinstr_end_call;
+	_wyinstr_mark_eval;
+	_wyinstr_dump;
+	_wyinstr_initbits;
+	local: *;
+};

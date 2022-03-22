@@ -2,56 +2,24 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <memory>
+#include <mutex>
 #include <stack>
-#include "boost/unordered_map.hpp"
-#include "boost/thread/recursive_mutex.hpp"
+#include <unordered_map>
 
-using callsite_id = std::pair<char *, int64_t>;
+using callsite_id = std::pair<const char *, int64_t>;
 
-class CallStack {
-  int64_t first;
-  callsite_id arr[800000];
-
-  public:
-  CallStack() { first = -1; }
-
-  void push(callsite_id entry) {
-    if (first >= 800000) {
-      throw std::runtime_error("Stack overflow!");
-    }
-    arr[++first] = entry;
+size_t hash_c_string(const char *p, size_t s) {
+  size_t result = 0;
+  const size_t prime = 31;
+  for (size_t i = 0; i < s; ++i) {
+    result = p[i] + (result * prime);
   }
-
-  void pop() {
-    if (first < 0) {
-      throw std::runtime_error("Popping from empty stack!");
-    }
-    first--;
-  }
-
-  callsite_id top() {
-    if (first < 0) {
-      throw std::runtime_error("Top of empty stack!");
-    }
-    return arr[first];
-  }
-
-  bool empty() {
-    return (first < 0);
-  }
-};
-
-size_t hash_c_string(const char* p, size_t s) {
-    size_t result = 0;
-    const size_t prime = 31;
-    for (size_t i = 0; i < s; ++i) {
-        result = p[i] + (result * prime);
-    }
-    return result;
+  return result;
 }
 
 struct pair_hash {
-  std::size_t operator()(const std::pair<char*, int64_t> &p) const {
+  std::size_t operator()(const std::pair<const char *, int64_t> &p) const {
     auto h1 = hash_c_string(p.first, strlen(p.first));
     auto h2 = std::hash<int64_t>{}(p.second);
 
@@ -59,11 +27,16 @@ struct pair_hash {
   }
 };
 
+struct callsite_id_comp {
+  bool operator()(callsite_id const &lhs, callsite_id const &rhs) const {
+    return (lhs.second == rhs.second && strcmp(lhs.first, rhs.first) == 0);
+  }
+};
+
 struct prof_report {
-  prof_report(int8_t num_args)
-      : _num_calls(1), _num_args(num_args) {
-    _unique_arg_evals = (int64_t*) calloc(num_args, sizeof(int64_t));
-    _arg_evals = (int64_t*) calloc(num_args, sizeof(int64_t));
+  prof_report(int8_t num_args) : _num_calls(1), _num_args(num_args) {
+    _unique_arg_evals = (int64_t *)calloc(num_args, sizeof(int64_t));
+    _arg_evals = (int64_t *)calloc(num_args, sizeof(int64_t));
   }
 
   ~prof_report() {
@@ -79,24 +52,43 @@ struct prof_report {
 
 static bool initialized = false;
 
-static boost::unordered_map<callsite_id, std::unique_ptr<struct prof_report>,
-                          pair_hash>
+static std::unordered_map<callsite_id, std::unique_ptr<struct prof_report>,
+                          pair_hash, callsite_id_comp>
     profile_info;
-static CallStack call_stack;
-boost::recursive_mutex wyinstr_mutex;
+static std::stack<callsite_id> call_stack;
+std::recursive_mutex wyinstr_mutex;
+static char const *first_fun_name = "__wyinstr_pre_main";
+
+extern "C" void __attribute__((noinline)) _wyinstr_init_prof() {
+  std::lock_guard<std::recursive_mutex> lock(wyinstr_mutex);
+  initialized = true;
+
+  const callsite_id first = std::make_pair(first_fun_name, 0);
+  profile_info.insert(
+      std::make_pair(first, std::make_unique<struct prof_report>(2)));
+
+  call_stack.push(first);
+
+#ifdef DEBUG
+  fprintf(stderr, "Initialized profiling! Top of stack: <%s, %li>",
+          call_stack.top().first, call_stack.top().second);
+#endif
+}
 
 extern "C" void __attribute__((noinline))
-_wyinstr_init_call(char *fun_name, int64_t callinstr_id, int8_t num_args) {
-  boost::recursive_mutex::scoped_lock lock(wyinstr_mutex);
-  if (initialized == false && strcmp(fun_name, "main") == 0) {
-    initialized = true;
+_wyinstr_init_call(const char *fun_name, int64_t callinstr_id,
+                   int8_t num_args) {
+  std::lock_guard<std::recursive_mutex> lock(wyinstr_mutex);
+  if (!initialized) {
+    return;
   }
 #ifdef DEBUG
-  fprintf(stderr, "Adding call from function %s with %d arguments!\n", fun_name,
-          num_args);
+  fprintf(stderr, "Adding call from callsite <%s,%li> with %d arguments!\n",
+          fun_name, callinstr_id, num_args);
 #endif
 
-  callsite_id id = std::make_pair(fun_name, callinstr_id);
+  const callsite_id id = std::make_pair(fun_name, callinstr_id);
+
   // first time callsite is reached, instantiate new profile report
   if (!profile_info.count(id)) {
 #ifdef DEBUG
@@ -105,7 +97,8 @@ _wyinstr_init_call(char *fun_name, int64_t callinstr_id, int8_t num_args) {
             "map size: %li\n",
             profile_info.size());
 #endif
-    profile_info.emplace(id, std::make_unique<struct prof_report>(num_args));
+    profile_info.insert(
+        std::make_pair(id, std::make_unique<struct prof_report>(num_args)));
   }
 
   struct prof_report *report = profile_info[id].get();
@@ -120,17 +113,13 @@ _wyinstr_init_call(char *fun_name, int64_t callinstr_id, int8_t num_args) {
 
 extern "C" __attribute__((noinline)) void _wyinstr_mark_eval(int8_t arg_index,
                                                              int64_t *bits) {
-  boost::recursive_mutex::scoped_lock lock(wyinstr_mutex);
+  std::lock_guard<std::recursive_mutex> lock(wyinstr_mutex);
   if (!initialized) {
     return;
   }
 #ifdef DEBUG
   fprintf(stderr, "Logging eval of arg: %d\n", arg_index);
 #endif
-
-  if (call_stack.empty()) {
-    return;
-  }
 
   callsite_id id = call_stack.top();
   struct prof_report *report = profile_info[id].get();
@@ -154,7 +143,10 @@ extern "C" __attribute__((noinline)) int64_t _wyinstr_initbits() {
 }
 
 extern "C" __attribute__((noinline)) void _wyinstr_end_call() {
-  boost::recursive_mutex::scoped_lock lock(wyinstr_mutex);
+  std::lock_guard<std::recursive_mutex> lock(wyinstr_mutex);
+  if (!initialized) {
+    return;
+  }
 #ifdef DEBUG
   fprintf(stderr, "Ending call from callsite <%s, %li>.\n",
           call_stack.top().first, call_stack.top().second);
@@ -169,11 +161,12 @@ extern "C" __attribute__((noinline)) void _wyinstr_end_call() {
 }
 
 extern "C" __attribute__((noinline)) void _wyinstr_dump() {
-  boost::recursive_mutex::scoped_lock lock(wyinstr_mutex);
+  std::lock_guard<std::recursive_mutex> lock(wyinstr_mutex);
   FILE *outfile = fopen("wyinstr_output.csv", "w");
-  fprintf(outfile, "fun_name,call_id,num_args,unique_evals,total_evals\n");
+  fprintf(outfile,
+          "fun_name,call_id,total_calls,num_args,unique_evals,total_evals\n");
   for (auto &[key, value] : profile_info) {
-    fprintf(outfile, "%s,%li,%d,", key.first, key.second,
+    fprintf(outfile, "%s,%li,%li,%d,", key.first, key.second, value->_num_calls,
             value->_num_args);
     for (int8_t i = 0; i < value->_num_args; ++i) {
       fprintf(outfile, "%li,", value->_unique_arg_evals[i]);
