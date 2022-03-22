@@ -8,21 +8,29 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 
-#include "FindLazyfiable.h"
-
 namespace llvm {
 struct WyvernInstrumentationPass : public ModulePass {
   static char ID;
   WyvernInstrumentationPass() : ModulePass(ID) {}
 
+  FunctionCallee initProfFun;
   FunctionCallee initBitsFun;
   FunctionCallee markFun;
   FunctionCallee dumpFun;
-  FunctionCallee logFun;
+  FunctionCallee initCallFun;
+  FunctionCallee endCallFun;
 
-  void InstrumentExitPoints(Module &M, Value *num_funcs_arg);
-  void InstrumentExit(Function *F, long long func_id, AllocaInst *bits);
-  void InstrumentFunction(Function *F, long long func_id);
+  void InstrumentEntryPoint(Module &M);
+  void InstrumentExitPoints(Module &M);
+  void
+  InstrumentFunction(Function *F, const TargetLibraryInfo &TLI,
+                     std::map<Instruction *, int64_t> instr_ids,
+                     std::shared_ptr<std::set<Function *>> promising = nullptr);
+  void InstrumentCallsite(CallBase *I, Function *F);
+  void InstrumentCallSites(
+      Function *F, const TargetLibraryInfo &TLI,
+      std::map<Instruction *, int64_t> instr_ids,
+      std::shared_ptr<std::set<Function *>> promising = nullptr);
   AllocaInst *InstrumentEntry(Function *F);
   void getAnalysisUsage(AnalysisUsage &AU) const;
   bool runOnModule(Module &);
