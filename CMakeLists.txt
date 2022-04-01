@@ -16,6 +16,9 @@ include_directories(${LLVM_INCLUDE_DIRS})
 link_directories(${LLVM_LIBRARY_DIRS})
 
 add_library(wyinstr SHARED wyinstr.cpp)
-target_link_options(wyinstr PUBLIC -static-libstdc++ -static-libgcc -Wl,--version-script=${CMAKE_SOURCE_DIR}/link_script)
+set_target_properties(wyinstr PROPERTIES
+	COMPILE_FLAGS "-g -O3"
+)
+target_link_options(wyinstr PUBLIC -static-libstdc++ -static-libgcc -lpthread -Wl,--version-script=${CMAKE_SOURCE_DIR}/link_script)
 
 add_subdirectory(passes)
