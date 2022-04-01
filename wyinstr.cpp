@@ -160,9 +160,10 @@ extern "C" __attribute__((noinline)) void _wyinstr_end_call() {
 #endif
 }
 
-extern "C" __attribute__((noinline)) void _wyinstr_dump() {
+extern "C" __attribute__((noinline)) void _wyinstr_dump(const char *mod_name) {
   std::lock_guard<std::recursive_mutex> lock(wyinstr_mutex);
-  FILE *outfile = fopen("wyinstr_output.csv", "w");
+  std::string filename = std::string(mod_name) + ".csv";
+  FILE *outfile = fopen(filename.c_str(), "w");
   fprintf(outfile,
           "fun_name,call_id,total_calls,num_args,unique_evals,total_evals\n");
   for (auto &[key, value] : profile_info) {
