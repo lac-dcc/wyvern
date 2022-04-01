@@ -1,0 +1,45 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 7fb9b1b..f01f306 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -384,6 +384,40 @@ endif()
+ # Produce lit.site.cfg
+ configure_file("${PROJECT_SOURCE_DIR}/lit.site.cfg.in" "${CMAKE_BINARY_DIR}/lit.site.cfg")
+ 
++# Wyvern Instrumentation - add binary name to compile definitions
++function(get_all_targets var)
++    set(targets)
++    get_all_targets_recursive(targets ${CMAKE_CURRENT_SOURCE_DIR})
++    set(${var} ${targets} PARENT_SCOPE)
++endfunction()
++
++macro(get_all_targets_recursive targets dir)
++    get_property(subdirectories DIRECTORY ${dir} PROPERTY SUBDIRECTORIES)
++    foreach(subdir ${subdirectories})
++        get_all_targets_recursive(${targets} ${subdir})
++    endforeach()
++
++    get_property(current_targets DIRECTORY ${dir} PROPERTY BUILDSYSTEM_TARGETS)
++    list(APPEND ${targets} ${current_targets})
++endmacro()
++
++option(WYVERN_USE_PGO "Whether to use PGO when optimizing with Wyvern" OFF)
++option(WYVERN_GENERATE_PGO "Whether to generate instrumentation to optimize with Wyvern" OFF)
++
++get_all_targets(all_targets)
++foreach(targ ${all_targets})
++  get_target_property(target_type ${targ} TYPE)
++  if (target_type STREQUAL "EXECUTABLE")
++    if (WYVERN_USE_PGO)
++		get_target_property(binary_dir ${targ} BINARY_DIR)
++		message(STATUS "${binary_dir}/${targ}.csv")
++		target_compile_options(${targ} PUBLIC -mllvm --wylazy-pgo-file=${binary_dir}/${targ}.csv)
++    elseif(WYVERN_GENERATE_PGO)
++	    target_compile_options(${targ} PUBLIC -mllvm --wyinstr-out-file=${targ})
++	endif()
++  endif ()
++endforeach()
++ 
+ get_property(TEST_SUITE_TARGETS GLOBAL PROPERTY TEST_SUITE_TARGETS)
+ add_custom_target(check
+   COMMAND ${TEST_SUITE_LIT} ${TEST_SUITE_LIT_FLAGS} .

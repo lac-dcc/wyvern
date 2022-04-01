@@ -1,5 +1,3 @@
-#define DEBUG_TYPE "ProgramSlicing"
-
 #include "ProgramSlice.h"
 
 #include <map>
@@ -26,6 +24,8 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <random>
+
+#define DEBUG_TYPE "ProgramSlicing"
 
 STATISTIC(InvalidSlices,
           "Slices which contain branches with no post dominator.");
