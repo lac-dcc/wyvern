@@ -11,7 +11,6 @@ set_target_properties(Wyvern PROPERTIES
 	COMPILE_FLAGS "-fno-rtti -g -O3"
 )
 
-
 if(APPLE)
 	set_target_properties(Wyvern PROPERTIES
 		LINK_FLAGS "-undefined dynamic_lookup"
