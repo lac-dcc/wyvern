@@ -288,7 +288,7 @@ void WyvernInstrumentationPass::getAnalysisUsage(AnalysisUsage &AU) const {
 }
 
 static llvm::RegisterStandardPasses
-    RegisterWyvernLazification(llvm::PassManagerBuilder::EP_EnabledOnOptLevel0,
+    RegisterWyvernInstrumentation(llvm::PassManagerBuilder::EP_FullLinkTimeOptimizationEarly,
                                [](const llvm::PassManagerBuilder &Builder,
                                   llvm::legacy::PassManagerBase &PM) {
                                  PM.add(new WyvernInstrumentationPass());
