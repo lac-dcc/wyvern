@@ -127,7 +127,7 @@ get_data_dependences_for(
         BBs.insert(BB);
       }
       for (const Value *gate : gates[PN->getParent()]) {
-        if (!visited.count(gate)) {
+        if (gate && !visited.count(gate)) {
           to_visit.push(gate);
         }
       }
