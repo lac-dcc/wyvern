@@ -20,6 +20,10 @@ static cl::opt<bool> WyvernInstrumentAll(
     cl::desc("Wyvern - Instrument all functions rather than only those with"
              " paths that do not use an argument."));
 
+static cl::opt<std::string> WyvernInstrumentOutputFile(
+    "wyinstr-out-file", cl::init(""),
+    cl::desc("Wyvern - Filename for instrumentation output."));
+
 #define DEBUG_TYPE "WyvernInstrumentationPass"
 
 static void updateDebugInfo(Instruction *I, Function *F) {
@@ -185,7 +189,9 @@ void WyvernInstrumentationPass::InstrumentExitPoints(Module &M) {
       if (F.getName() == "main") {
         if (auto *RI = dyn_cast<ReturnInst>(&*I)) {
           IRBuilder<> builder(RI);
-          CallInst *dumpCall = builder.CreateCall(dumpFun, {});
+          Constant *binName =
+              builder.CreateGlobalStringPtr(WyvernInstrumentOutputFile, "bin_name");
+          CallInst *dumpCall = builder.CreateCall(dumpFun, {binName});
           updateDebugInfo(dumpCall, &F);
         }
       }
@@ -195,7 +201,9 @@ void WyvernInstrumentationPass::InstrumentExitPoints(Module &M) {
             (CI->getCalledFunction()->getName() == "exit" ||
              CI->getCalledFunction()->getName() == "abort")) {
           IRBuilder<> builder(CI);
-          CallInst *dumpCall = builder.CreateCall(dumpFun, {});
+          Constant *binName =
+              builder.CreateGlobalStringPtr(WyvernInstrumentOutputFile, "bin_name");
+          CallInst *dumpCall = builder.CreateCall(dumpFun, {binName});
           updateDebugInfo(dumpCall, &F);
         }
       }
@@ -212,7 +220,6 @@ void WyvernInstrumentationPass::InstrumentEntryPoint(Module &M) {
     return;
   }
 
-  errs() << "F: " << *F << "\n";
   BasicBlock &entryBB = F->getEntryBlock();
   IRBuilder<> builder(&*entryBB.getFirstInsertionPt());
   CallInst *initProfCall = builder.CreateCall(initProfFun, {});
@@ -224,6 +231,11 @@ bool WyvernInstrumentationPass::runOnModule(Module &M) {
     return false;
   }
 
+  if (WyvernInstrumentOutputFile.empty()) {
+    errs() << "Instrumentation output file path not provided!\n";
+    return false;
+  }
+
   LLVMContext &Ctx = M.getContext();
 
   initBitsFun =
@@ -231,7 +243,8 @@ bool WyvernInstrumentationPass::runOnModule(Module &M) {
   markFun =
       M.getOrInsertFunction("_wyinstr_mark_eval", Type::getVoidTy(Ctx),
                             Type::getInt8Ty(Ctx), Type::getInt64PtrTy(Ctx));
-  dumpFun = M.getOrInsertFunction("_wyinstr_dump", Type::getVoidTy(Ctx));
+  dumpFun = M.getOrInsertFunction("_wyinstr_dump", Type::getVoidTy(Ctx),
+                                  Type::getInt8PtrTy(Ctx));
   endCallFun = M.getOrInsertFunction("_wyinstr_end_call", Type::getVoidTy(Ctx));
   initCallFun = M.getOrInsertFunction(
       "_wyinstr_init_call", Type::getVoidTy(Ctx), Type::getInt8PtrTy(Ctx),
