@@ -23,12 +23,11 @@ struct WyvernInstrumentationPass : public ModulePass {
   void InstrumentEntryPoint(Module &M);
   void InstrumentExitPoints(Module &M);
   void
-  InstrumentFunction(Function *F, const TargetLibraryInfo &TLI,
+  InstrumentFunction(Function *F,
                      std::map<Instruction *, int64_t> instr_ids,
                      std::shared_ptr<std::set<Function *>> promising = nullptr);
-  void InstrumentCallsite(CallBase *I, Function *F);
   void InstrumentCallSites(
-      Function *F, const TargetLibraryInfo &TLI,
+      Function *F,
       std::map<Instruction *, int64_t> instr_ids,
       std::shared_ptr<std::set<Function *>> promising = nullptr);
   AllocaInst *InstrumentEntry(Function *F);

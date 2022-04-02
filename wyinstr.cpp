@@ -5,7 +5,7 @@
 #include <memory>
 #include <mutex>
 #include <stack>
-#include <unordered_map>
+#include <map>
 
 using callsite_id = std::pair<const char *, int64_t>;
 
@@ -18,31 +18,16 @@ size_t hash_c_string(const char *p, size_t s) {
   return result;
 }
 
-struct pair_hash {
-  std::size_t operator()(const std::pair<const char *, int64_t> &p) const {
-    auto h1 = hash_c_string(p.first, strlen(p.first));
-    auto h2 = std::hash<int64_t>{}(p.second);
-
-    return h1 ^ h2;
-  }
-};
-
-struct callsite_id_comp {
-  bool operator()(callsite_id const &lhs, callsite_id const &rhs) const {
-    return (lhs.second == rhs.second && strcmp(lhs.first, rhs.first) == 0);
-  }
-};
-
 struct prof_report {
   prof_report(int8_t num_args) : _num_calls(1), _num_args(num_args) {
     _unique_arg_evals = (int64_t *)calloc(num_args, sizeof(int64_t));
     _arg_evals = (int64_t *)calloc(num_args, sizeof(int64_t));
   }
 
-  ~prof_report() {
-    free(_unique_arg_evals);
-    free(_arg_evals);
-  }
+  // ~prof_report() {
+  //   free(_unique_arg_evals);
+  //   free(_arg_evals);
+  // }
 
   int64_t _num_calls;
   int8_t _num_args;
@@ -52,8 +37,7 @@ struct prof_report {
 
 static bool initialized = false;
 
-static std::unordered_map<callsite_id, std::unique_ptr<struct prof_report>,
-                          pair_hash, callsite_id_comp>
+static std::map<callsite_id, std::unique_ptr<struct prof_report>>
     profile_info;
 static std::stack<callsite_id> call_stack;
 std::recursive_mutex wyinstr_mutex;
@@ -70,7 +54,7 @@ extern "C" void __attribute__((noinline)) _wyinstr_init_prof() {
   call_stack.push(first);
 
 #ifdef DEBUG
-  fprintf(stderr, "Initialized profiling! Top of stack: <%s, %li>",
+  fprintf(stderr, "Initialized profiling! Top of stack: <%s, %li>\n",
           call_stack.top().first, call_stack.top().second);
 #endif
 }
@@ -148,8 +132,8 @@ extern "C" __attribute__((noinline)) void _wyinstr_end_call() {
     return;
   }
 #ifdef DEBUG
-  fprintf(stderr, "Ending call from callsite <%s, %li>.\n",
-          call_stack.top().first, call_stack.top().second);
+  fprintf(stderr, "Ending call from callsite <%s, %li>. Stack size before popping: %li\n",
+          call_stack.top().first, call_stack.top().second, call_stack.size());
 #endif
   call_stack.pop();
 #ifdef DEBUG
