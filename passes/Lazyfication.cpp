@@ -208,6 +208,11 @@ void updateThunkArgUses(Function *F, Value *thunkValue,
 
   Value *toReplace = isCallee ? thunkValue : valueToReplace;
   for (auto &Use : toReplace->uses()) {
+    
+    if (!Use.getUser()) {
+      continue;
+    }
+
     Instruction *UserI = dyn_cast<Instruction>(Use.getUser());
     if (UserI && !userCalls.count(UserI)) {
       // If the use is a PHINode, the use happens at the edge, so we cannot
