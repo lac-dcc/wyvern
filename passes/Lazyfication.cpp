@@ -182,21 +182,31 @@ void removeAttributesFromThunkArgument(Value &V, unsigned int index) {
 }
 
 /**
- * At this point, Function @param F was lazyfied in terms of Argument
- * @param optimizedArg, so that the formal parameter is now a thunk. However,
- * uses of @param optimizedArg still use it as a value. This function replaces
- * all uses of @param optimizedArg by an invocation of the function pointer
- * contained within the thunk.
+ * At this point, Function @param F was lazyfied, and one of its arguments
+ * This could be either the caller or the callee.
  *
+ * In regards to the caller, @param thunkValue is the thunk that is allocated
+ * within it and then passed onto a lazyfied callee. However, there may be uses
+ * of the lazyfied value @param valueToReplace other than the callsite. We
+ * replace uses of this value by calls to the thunk, so that we maximize the
+ * amount of potential dead code generation for further optimization.
+ *
+ * In regards to the callee, it was lazyfied and one of its arguments is now
+ * @param thunkValue. However, uses of the argument within the function still
+ * use it as a value rather than a thunk, so we replace these uses by proper
+ * loading/invocation of the thunk.
  */
 void updateThunkArgUses(Function *F, Value *thunkValue,
-                        Function *slicedFunction, Value *valueToReplace = nullptr) {
+                        Function *slicedFunction,
+                        Value *valueToReplace = nullptr) {
+  // We could be adding thunk uses in either the caller or callee
+  bool isCallee = (valueToReplace == nullptr);
   std::map<User *, CallInst *> userCalls;
   std::set<Use *> usesToChange;
 
   IRBuilder<> builder(F->getContext());
 
-  Value *toReplace = valueToReplace ? valueToReplace : thunkValue;
+  Value *toReplace = isCallee ? thunkValue : valueToReplace;
   for (auto &Use : toReplace->uses()) {
     Instruction *UserI = dyn_cast<Instruction>(Use.getUser());
     if (UserI && !userCalls.count(UserI)) {
@@ -211,16 +221,25 @@ void updateThunkArgUses(Function *F, Value *thunkValue,
         builder.SetInsertPoint(UserI);
       }
 
-      Value *thunkFPtrGEP = builder.CreateStructGEP(
-          thunkValue->getType()->getPointerElementType(), thunkValue, 0,
-          "_wyvern_thunk_fptr_addr");
-      Value *thunkFPtrLoad =
-          builder.CreateLoad(thunkValue->getType()
-                                 ->getPointerElementType()
-                                 ->getStructElementType(0),
-                             thunkFPtrGEP, "_wyvern_thunkfptr");
+      Value *thunkCallTarget = slicedFunction;
+
+      // When optimizing the callee, load the function pointer from the thunk
+      if (isCallee) {
+        Value *thunkFPtrGEP = builder.CreateStructGEP(
+            thunkValue->getType()->getPointerElementType(), thunkValue, 0,
+            "_wyvern_thunk_fptr_addr");
+        Value *thunkFPtrLoad =
+            builder.CreateLoad(thunkValue->getType()
+                                   ->getPointerElementType()
+                                   ->getStructElementType(0),
+                               thunkFPtrGEP, "_wyvern_thunkfptr");
+        thunkCallTarget = thunkFPtrLoad;
+      }
+
+      // For both caller and callee, add call to delegate function (either
+      // loaded from the thunk or directly from the value used to initialize it)
       CallInst *thunkCall =
-          builder.CreateCall(slicedFunction->getFunctionType(), thunkFPtrLoad,
+          builder.CreateCall(slicedFunction->getFunctionType(), thunkCallTarget,
                              {thunkValue}, "_wyvern_thunkcall");
 
       if (PHINode *PN = dyn_cast<PHINode>(UserI)) {
@@ -233,7 +252,7 @@ void updateThunkArgUses(Function *F, Value *thunkValue,
     }
   }
 
-  for (auto &Use : thunkValue->uses()) {
+  for (auto &Use : toReplace->uses()) {
     Instruction *UserI = dyn_cast<Instruction>(Use.getUser());
     // Replacing uses/users immediately can break use-def chains. Instead, keep
     // track of all uses to be updated.
@@ -414,7 +433,7 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
 bool WyvernLazyficationPass::runOnModule(Module &M) {
   SmallestSliceSize = std::numeric_limits<unsigned int>::max();
   FindLazyfiableAnalysis &FLA = getAnalysis<FindLazyfiableAnalysis>();
-  
+
   if (!WyvernLazyfication) {
     return false;
   }

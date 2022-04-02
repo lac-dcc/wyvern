@@ -175,8 +175,8 @@ void WyvernInstrumentationPass::InstrumentExitPoints(Module &M) {
       if (F.getName() == "main") {
         if (auto *RI = dyn_cast<ReturnInst>(&*I)) {
           IRBuilder<> builder(RI);
-          Constant *binName =
-              builder.CreateGlobalStringPtr(WyvernInstrumentOutputFile, "bin_name");
+          Constant *binName = builder.CreateGlobalStringPtr(
+              WyvernInstrumentOutputFile, "bin_name");
           CallInst *dumpCall = builder.CreateCall(dumpFun, {binName});
           updateDebugInfo(dumpCall, &F);
         }
@@ -187,8 +187,8 @@ void WyvernInstrumentationPass::InstrumentExitPoints(Module &M) {
             (CI->getCalledFunction()->getName() == "exit" ||
              CI->getCalledFunction()->getName() == "abort")) {
           IRBuilder<> builder(CI);
-          Constant *binName =
-              builder.CreateGlobalStringPtr(WyvernInstrumentOutputFile, "bin_name");
+          Constant *binName = builder.CreateGlobalStringPtr(
+              WyvernInstrumentOutputFile, "bin_name");
           CallInst *dumpCall = builder.CreateCall(dumpFun, {binName});
           updateDebugInfo(dumpCall, &F);
         }
@@ -273,12 +273,12 @@ void WyvernInstrumentationPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<TargetLibraryInfoWrapperPass>();
 }
 
-static llvm::RegisterStandardPasses
-    RegisterWyvernInstrumentation(llvm::PassManagerBuilder::EP_FullLinkTimeOptimizationEarly,
-                               [](const llvm::PassManagerBuilder &Builder,
-                                  llvm::legacy::PassManagerBase &PM) {
-                                 PM.add(new WyvernInstrumentationPass());
-                               });
+static llvm::RegisterStandardPasses RegisterWyvernInstrumentation(
+    llvm::PassManagerBuilder::EP_FullLinkTimeOptimizationEarly,
+    [](const llvm::PassManagerBuilder &Builder,
+       llvm::legacy::PassManagerBase &PM) {
+      PM.add(new WyvernInstrumentationPass());
+    });
 
 char WyvernInstrumentationPass::ID = 0;
 static RegisterPass<WyvernInstrumentationPass>
