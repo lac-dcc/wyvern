@@ -54,15 +54,20 @@ static std::map<Instruction *, int64_t> computeInstrIDs(Function *F) {
 }
 
 void WyvernInstrumentationPass::InstrumentCallSites(
-    Function *F, const TargetLibraryInfo &TLI,
-    std::map<Instruction *, int64_t> instr_ids,
+    Function *F, std::map<Instruction *, int64_t> instr_ids,
     std::shared_ptr<std::set<Function *>> promising) {
   inst_iterator I = inst_begin(F);
   for (inst_iterator E = inst_end(F); I != E; ++I) {
     if (CallBase *CB = dyn_cast<CallBase>(&*I)) {
+
       Function *Callee = CB->getCalledFunction();
 
-      if (Callee && Callee->getName().contains("_wyinstr_")) {
+      if (Callee && Callee->isDeclaration()) {
+        continue;
+      }
+
+      if (Callee &&
+          (Callee->getName().contains("_wyinstr_") || Callee->isIntrinsic())) {
         continue;
       }
 
@@ -77,7 +82,7 @@ void WyvernInstrumentationPass::InstrumentCallSites(
           builder.CreateCall(initCallFun, {callerName, callInstId, numArgs});
       updateDebugInfo(initCall, F);
 
-      if (CallInst *CI = dyn_cast<CallInst>(CB)) {
+      /*if (CallInst *CI = dyn_cast<CallInst>(CB)) {
         builder.SetInsertPoint(CB->getNextNode());
         CallInst *endCall = builder.CreateCall(endCallFun, {});
         updateDebugInfo(endCall, F);
@@ -101,7 +106,7 @@ void WyvernInstrumentationPass::InstrumentCallSites(
           CallInst *endCall2 = builder.CreateCall(endCallFun, {});
           updateDebugInfo(endCall2, F);
         }
-      }
+      }*/
     }
   }
 }
@@ -122,13 +127,20 @@ AllocaInst *WyvernInstrumentationPass::InstrumentEntry(Function *F) {
 }
 
 void WyvernInstrumentationPass::InstrumentFunction(
-    Function *F, const TargetLibraryInfo &TLI,
-    std::map<Instruction *, int64_t> instr_ids,
+    Function *F, std::map<Instruction *, int64_t> instr_ids,
     std::shared_ptr<std::set<Function *>> promising) {
 
-  // do not instrument lib functions
-  LibFunc libfunc;
-  if (TLI.getLibFunc(F->getFunction(), libfunc)) {
+  for (BasicBlock &BB : *F) {
+    for (Instruction &I : BB) {
+      if (ReturnInst *RI = dyn_cast<ReturnInst>(&I)) {
+        IRBuilder<> builder(RI);
+        CallInst *endCall = builder.CreateCall(endCallFun, {});
+        updateDebugInfo(endCall, F);
+      }
+    }
+  }
+
+  if (promising && promising->count(F) == 0) {
     return;
   }
 
@@ -175,8 +187,8 @@ void WyvernInstrumentationPass::InstrumentExitPoints(Module &M) {
       if (F.getName() == "main") {
         if (auto *RI = dyn_cast<ReturnInst>(&*I)) {
           IRBuilder<> builder(RI);
-          Constant *binName =
-              builder.CreateGlobalStringPtr(WyvernInstrumentOutputFile, "bin_name");
+          Constant *binName = builder.CreateGlobalStringPtr(
+              WyvernInstrumentOutputFile, "bin_name");
           CallInst *dumpCall = builder.CreateCall(dumpFun, {binName});
           updateDebugInfo(dumpCall, &F);
         }
@@ -187,8 +199,8 @@ void WyvernInstrumentationPass::InstrumentExitPoints(Module &M) {
             (CI->getCalledFunction()->getName() == "exit" ||
              CI->getCalledFunction()->getName() == "abort")) {
           IRBuilder<> builder(CI);
-          Constant *binName =
-              builder.CreateGlobalStringPtr(WyvernInstrumentOutputFile, "bin_name");
+          Constant *binName = builder.CreateGlobalStringPtr(
+              WyvernInstrumentOutputFile, "bin_name");
           CallInst *dumpCall = builder.CreateCall(dumpFun, {binName});
           updateDebugInfo(dumpCall, &F);
         }
@@ -251,15 +263,11 @@ bool WyvernInstrumentationPass::runOnModule(Module &M) {
       continue;
     }
 
-    const TargetLibraryInfo &TLI =
-        getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
-    if (promisingFunctions && promisingFunctions->count(&F) == 0) {
-      continue;
-    }
+    F.addFnAttr(Attribute::NoInline);
 
     std::map<Instruction *, int64_t> instr_ids = computeInstrIDs(&F);
-    InstrumentFunction(&F, TLI, instr_ids, promisingFunctions);
-    InstrumentCallSites(&F, TLI, instr_ids, promisingFunctions);
+    InstrumentFunction(&F, instr_ids, promisingFunctions);
+    InstrumentCallSites(&F, instr_ids, promisingFunctions);
   }
 
   InstrumentEntryPoint(M);
@@ -273,12 +281,12 @@ void WyvernInstrumentationPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<TargetLibraryInfoWrapperPass>();
 }
 
-static llvm::RegisterStandardPasses
-    RegisterWyvernInstrumentation(llvm::PassManagerBuilder::EP_FullLinkTimeOptimizationEarly,
-                               [](const llvm::PassManagerBuilder &Builder,
-                                  llvm::legacy::PassManagerBase &PM) {
-                                 PM.add(new WyvernInstrumentationPass());
-                               });
+static llvm::RegisterStandardPasses RegisterWyvernInstrumentation(
+    llvm::PassManagerBuilder::EP_FullLinkTimeOptimizationEarly,
+    [](const llvm::PassManagerBuilder &Builder,
+       llvm::legacy::PassManagerBase &PM) {
+      PM.add(new WyvernInstrumentationPass());
+    });
 
 char WyvernInstrumentationPass::ID = 0;
 static RegisterPass<WyvernInstrumentationPass>
