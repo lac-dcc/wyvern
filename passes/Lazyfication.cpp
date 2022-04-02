@@ -189,37 +189,43 @@ void removeAttributesFromThunkArgument(Value &V, unsigned int index) {
  * contained within the thunk.
  *
  */
-void updateThunkArgUses(Function *F, Argument *optimizedArg,
-                        Function *slicedFunction) {
+void updateThunkArgUses(Function *F, Value *thunkValue,
+                        Function *slicedFunction, Value *valueToReplace = nullptr) {
   std::map<User *, CallInst *> userCalls;
   std::set<Use *> usesToChange;
 
   IRBuilder<> builder(F->getContext());
 
-  for (auto &Use : optimizedArg->uses()) {
+  Value *toReplace = valueToReplace ? valueToReplace : thunkValue;
+  for (auto &Use : toReplace->uses()) {
     Instruction *UserI = dyn_cast<Instruction>(Use.getUser());
     if (UserI && !userCalls.count(UserI)) {
       // If the use is a PHINode, the use happens at the edge, so we cannot
       // insert the thunk load/call at the PHI's block. Instead, we must insert
       // them at the end of the block which flows into the PHI node
+      BasicBlock *origin = nullptr;
       if (PHINode *PN = dyn_cast<PHINode>(UserI)) {
-        BasicBlock *origin = PN->getIncomingBlock(Use);
+        origin = PN->getIncomingBlock(Use);
         builder.SetInsertPoint(origin->getTerminator());
       } else {
         builder.SetInsertPoint(UserI);
       }
 
       Value *thunkFPtrGEP = builder.CreateStructGEP(
-          optimizedArg->getType()->getPointerElementType(), optimizedArg, 0,
+          thunkValue->getType()->getPointerElementType(), thunkValue, 0,
           "_wyvern_thunk_fptr_addr");
       Value *thunkFPtrLoad =
-          builder.CreateLoad(optimizedArg->getType()
+          builder.CreateLoad(thunkValue->getType()
                                  ->getPointerElementType()
                                  ->getStructElementType(0),
                              thunkFPtrGEP, "_wyvern_thunkfptr");
       CallInst *thunkCall =
           builder.CreateCall(slicedFunction->getFunctionType(), thunkFPtrLoad,
-                             {optimizedArg}, "_wyvern_thunkcall");
+                             {thunkValue}, "_wyvern_thunkcall");
+
+      if (PHINode *PN = dyn_cast<PHINode>(UserI)) {
+        PN->setIncomingValueForBlock(PN->getIncomingBlock(Use), thunkCall);
+      }
 
       // Replacing uses/users immediately can break use-def chains. Instead,
       // keep track of all users to be updated.
@@ -227,7 +233,7 @@ void updateThunkArgUses(Function *F, Argument *optimizedArg,
     }
   }
 
-  for (auto &Use : optimizedArg->uses()) {
+  for (auto &Use : thunkValue->uses()) {
     Instruction *UserI = dyn_cast<Instruction>(Use.getUser());
     // Replacing uses/users immediately can break use-def chains. Instead, keep
     // track of all uses to be updated.
@@ -321,6 +327,8 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
                     << caller->getName() << " call to " << callee->getName()
                     << "\n");
 
+  errs() << *caller << "\n";
+
   IRBuilder<> builder(M.getContext());
   builder.SetInsertPoint(&CI);
 
@@ -391,6 +399,8 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
   CI.setArgOperand(index, thunkAlloca);
   removeAttributesFromThunkArgument(CI, index);
   removeAttributesFromThunkArgument(*newCallee, index);
+  updateThunkArgUses(caller, thunkAlloca, thunkFunction, lazyfiableArg);
+  errs() << *caller << "\n";
 
   uint64_t sliceSize = getNumberOfInsts(*thunkFunction);
   TotalSliceSize += sliceSize;
