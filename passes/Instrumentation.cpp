@@ -62,21 +62,7 @@ void WyvernInstrumentationPass::InstrumentCallSites(
     if (CallBase *CB = dyn_cast<CallBase>(&*I)) {
       Function *Callee = CB->getCalledFunction();
 
-      if (Callee && (Callee->isIntrinsic() || Callee->getName() == "exit" ||
-                     Callee->getName() == "abort")) {
-        continue;
-      }
-
-      LibFunc libfunc;
-      if (Callee && TLI.getLibFunc(Callee->getFunction(), libfunc)) {
-        continue;
-      }
-
-      else if (promising && promising->count(Callee) == 0) {
-        continue;
-      }
-
-      else if (Callee && Callee->getName().contains("_wyinstr_")) {
+      if (Callee && Callee->getName().contains("_wyinstr_")) {
         continue;
       }
 
