@@ -327,8 +327,6 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
                     << caller->getName() << " call to " << callee->getName()
                     << "\n");
 
-  errs() << *caller << "\n";
-
   IRBuilder<> builder(M.getContext());
   builder.SetInsertPoint(&CI);
 
@@ -400,7 +398,6 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
   removeAttributesFromThunkArgument(CI, index);
   removeAttributesFromThunkArgument(*newCallee, index);
   updateThunkArgUses(caller, thunkAlloca, thunkFunction, lazyfiableArg);
-  errs() << *caller << "\n";
 
   uint64_t sliceSize = getNumberOfInsts(*thunkFunction);
   TotalSliceSize += sliceSize;
