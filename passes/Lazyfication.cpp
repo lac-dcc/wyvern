@@ -208,11 +208,6 @@ void updateThunkArgUses(Function *F, Value *thunkValue,
 
   Value *toReplace = isCallee ? thunkValue : valueToReplace;
   for (auto &Use : toReplace->uses()) {
-    
-    if (!Use.getUser()) {
-      continue;
-    }
-
     Instruction *UserI = dyn_cast<Instruction>(Use.getUser());
     if (UserI && !userCalls.count(UserI)) {
       // If the use is a PHINode, the use happens at the edge, so we cannot
@@ -415,8 +410,15 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
     }
   }
 
-  newCallee =
-      cloneCalleeFunction(*callee, index, *thunkFunction, thunkAlloca, M);
+  Function *previouslyClonedCallee =
+      clonedCallees[std::make_pair(callee, index)];
+  if (previouslyClonedCallee) {
+    newCallee = previouslyClonedCallee;
+  } else {
+    newCallee =
+        cloneCalleeFunction(*callee, index, *thunkFunction, thunkAlloca, M);
+  }
+
   CI.setCalledFunction(newCallee);
   CI.setArgOperand(index, thunkAlloca);
   removeAttributesFromThunkArgument(CI, index);
