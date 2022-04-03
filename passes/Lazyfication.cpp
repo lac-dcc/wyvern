@@ -410,13 +410,14 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
     }
   }
 
-  Function *previouslyClonedCallee =
-      clonedCallees[std::make_pair(callee, index)];
+  auto pair = std::make_pair(callee, index);
+  Function *previouslyClonedCallee = clonedCallees[pair];
   if (previouslyClonedCallee) {
     newCallee = previouslyClonedCallee;
   } else {
     newCallee =
         cloneCalleeFunction(*callee, index, *thunkFunction, thunkAlloca, M);
+    clonedCallees[pair] = newCallee;
   }
 
   CI.setCalledFunction(newCallee);
