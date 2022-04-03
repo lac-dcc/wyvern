@@ -462,6 +462,9 @@ bool WyvernLazyficationPass::runOnModule(Module &M) {
         for (uint8_t argIdx = 0; argIdx < CI->arg_size(); ++argIdx) {
           if (shouldLazifyCallsitePGO(CI, argIdx)) {
             changed = lazifyCallsite(*CI, argIdx, M);
+            if (changed) {
+              break;
+            }
           }
         }
       }
