@@ -347,7 +347,7 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
                     << "\n");
 
   IRBuilder<> builder(M.getContext());
-  builder.SetInsertPoint(&CI);
+  builder.SetInsertPoint(lazyfiableArg);
 
   Function *thunkFunction, *newCallee;
   AllocaInst *thunkAlloca;
