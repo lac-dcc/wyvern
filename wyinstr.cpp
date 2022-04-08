@@ -2,10 +2,10 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <map>
 #include <memory>
 #include <mutex>
 #include <stack>
-#include <map>
 
 using callsite_id = std::pair<const char *, int64_t>;
 
@@ -37,8 +37,7 @@ struct prof_report {
 
 static bool initialized = false;
 
-static std::map<callsite_id, std::unique_ptr<struct prof_report>>
-    profile_info;
+static std::map<callsite_id, std::unique_ptr<struct prof_report>> profile_info;
 static std::stack<callsite_id> call_stack;
 std::recursive_mutex wyinstr_mutex;
 static char const *first_fun_name = "__wyinstr_pre_main";
@@ -132,8 +131,10 @@ extern "C" __attribute__((noinline)) void _wyinstr_end_call() {
     return;
   }
 #ifdef DEBUG
-  fprintf(stderr, "Ending call from callsite <%s, %li>. Stack size before popping: %li\n",
-          call_stack.top().first, call_stack.top().second, call_stack.size());
+  fprintf(
+      stderr,
+      "Ending call from callsite <%s, %li>. Stack size before popping: %li\n",
+      call_stack.top().first, call_stack.top().second, call_stack.size());
 #endif
   call_stack.pop();
 #ifdef DEBUG
@@ -160,6 +161,7 @@ extern "C" __attribute__((noinline)) void _wyinstr_dump(const char *mod_name) {
       fprintf(outfile, "%li,", value->_arg_evals[i]);
     }
     fprintf(outfile, "\n");
+    fflush(outfile);
   }
   fclose(outfile);
 }
