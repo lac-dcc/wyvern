@@ -540,6 +540,15 @@ bool ProgramSlice::canOutline() {
         return false;
       }
     }
+
+    if (const LoadInst *LI = dyn_cast<LoadInst>(I)) {
+      if (const GlobalValue *GV =
+              dyn_cast<GlobalValue>(LI->getPointerOperand())) {
+        errs() << "Cannot outline slice because instruction loads from global "
+                  "variable: "
+               << *GV << "\n";
+      }
+    }
   }
 
   if (LI.getLoopDepth(_CallSite->getParent()) > 0) {
