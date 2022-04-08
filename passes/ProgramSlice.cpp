@@ -359,13 +359,10 @@ void updatePHINodes(Function *F) {
         break;
       }
       ++I_it;
-      for (auto it = PN->block_begin(); it != PN->block_end(); ++it) {
-        BasicBlock *incBB = *it;
+      for (unsigned PI = 0, PE = PN->getNumIncomingValues(); PI != PE; ++PI) {
+        BasicBlock *incBB = PN->getIncomingBlock(PI);
         if (incBB && !preds.count(incBB)) {
           PN->removeIncomingValue(incBB);
-        }
-        if (PN->getNumIncomingValues() == 0) {
-          break;
         }
       }
     }
