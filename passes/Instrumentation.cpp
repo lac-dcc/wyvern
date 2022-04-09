@@ -136,6 +136,13 @@ void WyvernInstrumentationPass::InstrumentFunction(
         IRBuilder<> builder(RI);
         CallInst *endCall = builder.CreateCall(endCallFun, {});
         updateDebugInfo(endCall, F);
+      } else if (CallBase *CB = dyn_cast<CallBase>(&I)) {
+        if (CB->getCalledFunction() &&
+            CB->getCalledFunction()->getName() == "__cxa_throw") {
+          IRBuilder<> builder(CB);
+          CallInst *endCall = builder.CreateCall(endCallFun, {});
+          updateDebugInfo(endCall, F);
+        }
       }
     }
   }
