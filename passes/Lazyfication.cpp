@@ -80,6 +80,10 @@ bool WyvernLazyficationPass::shouldLazifyCallsitePGO(CallInst *CI,
     return false;
   }
 
+  if (prof_info->_uniqueEvals.size() <= argIdx) {
+    return false;
+  }
+
   uint64_t numCalls = prof_info->_numCalls;
   uint64_t uniqueEvals = prof_info->_uniqueEvals[argIdx];
   double evalRate = (double)uniqueEvals / (double)numCalls;
@@ -342,9 +346,19 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
     return false;
   }
 
+  if (callee->isVarArg()) {
+    LLVM_DEBUG(dbgs() << "Cannot lazify argument. Callee function has variable "
+                         "number of input arguments!\n");
+    return false;
+  }
+
   LLVM_DEBUG(dbgs() << "Lazifying: " << *lazyfiableArg << " in func "
                     << caller->getName() << " call to " << callee->getName()
                     << "\n");
+
+  errs() << "Lazifying: " << *lazyfiableArg << " in func " << caller->getName()
+         << " call to " << callee->getName() << ":\n"
+         << CI << "\n";
 
   IRBuilder<> builder(M.getContext());
   builder.SetInsertPoint(lazyfiableArg);
@@ -352,9 +366,18 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
   Function *thunkFunction, *newCallee;
   AllocaInst *thunkAlloca;
   StructType *thunkStructType;
-  if (WyvernLazyficationMemoization) {
-    std::tie(thunkFunction, thunkStructType) = slice.memoizedOutline();
 
+  /*if (lazyfiedValues.count(lazyfiableArg)) {
+    errs() << "Hit the cache!\n";
+    std::tie(thunkFunction, thunkStructType) = lazyfiedValues[lazyfiableArg];
+  } else {*/
+  std::tie(thunkFunction, thunkStructType) =
+      WyvernLazyficationMemoization ? slice.memoizedOutline() : slice.outline();
+  /*lazyfiedValues[lazyfiableArg] = std::make_pair(thunkFunction,
+thunkStructType);
+}*/
+
+  if (WyvernLazyficationMemoization) {
     // allocate thunk, initialize it with:
     // struct thunk {
     //   fptr = thunkFunction
@@ -384,8 +407,6 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
       ++i;
     }
   } else {
-    std::tie(thunkFunction, thunkStructType) = slice.outline();
-
     // allocate thunk, initialize it with:
     // struct thunk {
     //   fptr = thunkFunction
@@ -410,14 +431,14 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
     }
   }
 
-  auto pair = std::make_pair(callee, index);
-  Function *previouslyClonedCallee = clonedCallees[pair];
+  auto tuple = std::make_tuple(callee, index, thunkStructType);
+  Function *previouslyClonedCallee = clonedCallees[tuple];
   if (previouslyClonedCallee) {
     newCallee = previouslyClonedCallee;
   } else {
     newCallee =
         cloneCalleeFunction(*callee, index, *thunkFunction, thunkAlloca, M);
-    clonedCallees[pair] = newCallee;
+    clonedCallees[tuple] = newCallee;
   }
 
   CI.setCalledFunction(newCallee);
@@ -478,6 +499,17 @@ bool WyvernLazyficationPass::runOnModule(Module &M) {
       Function *callee = pair.first->getCalledFunction();
       if (FLA.getLazyfiablePaths().count(std::make_pair(callee, argIdx)) > 0) {
         changed = lazifyCallsite(*CI, argIdx, M);
+      }
+    }
+  }
+
+  for (Function &F : M) {
+    for (BasicBlock &BB : F) {
+      for (Instruction &I : BB) {
+        if (!isa<PHINode>(&I)) {
+          continue;
+        }
+        PHINode *PN = cast<PHINode>(&I);
       }
     }
   }

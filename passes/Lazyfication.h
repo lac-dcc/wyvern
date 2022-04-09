@@ -36,7 +36,8 @@ struct WyvernLazyficationPass : public ModulePass {
   std::set<std::pair<Function *, Instruction *>> lazifiedFunctions;
   std::unordered_map<CallBase *, std::unique_ptr<WyvernCallSiteProfInfo>>
       profileInfo;
-  std::map<std::pair<Function*, unsigned>, Function*> clonedCallees;
+  std::map<std::tuple<Function*, unsigned, StructType*>, Function*> clonedCallees;
+  //std::map<Instruction *, std::pair<Function *, StructType *>> lazyfiedValues;
 
   bool runOnModule(Module &);
   void getAnalysisUsage(AnalysisUsage &) const;
