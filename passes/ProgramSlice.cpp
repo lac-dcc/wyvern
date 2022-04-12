@@ -513,13 +513,13 @@ bool ProgramSlice::canOutline() {
   LoopInfo LI = LoopInfo(DT);
   for (const Instruction *I : _instsInSlice) {
     if (I->mayThrow()) {
-      errs() << "Cannot outline because inst may have throw: " << *I << "\n";
+      errs() << "Cannot outline because inst may throw: " << *I << "\n";
       return false;
     }
 
-    else if (I->mayWriteToMemory()) {
-      errs() << "Cannot outline because inst may write to memory: " << *I
-             << "\n";
+    else if (I->mayReadOrWriteMemory()) {
+      errs() << "Cannot outline because inst may read or write to memory: "
+             << *I << "\n";
       return false;
     }
 
@@ -535,15 +535,6 @@ bool ProgramSlice::canOutline() {
         errs() << "Cannot outline slice because alloca has address taken:"
                << *AI << "\n";
         return false;
-      }
-    }
-
-    if (const LoadInst *LI = dyn_cast<LoadInst>(I)) {
-      if (const GlobalValue *GV =
-              dyn_cast<GlobalValue>(LI->getPointerOperand())) {
-        errs() << "Cannot outline slice because instruction loads from global "
-                  "variable: "
-               << *GV << "\n";
       }
     }
   }
