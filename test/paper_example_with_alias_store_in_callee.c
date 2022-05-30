@@ -2,7 +2,9 @@
 #include <stdlib.h>
 
 __attribute__((noinline))
-int callee(int key, int value, int N) {
+int callee(int key, int *keys, int value, int N) {
+  keys[0] = 10;
+  
   if (key != 0 && value < N) {
     printf("User has access\n");
     return 1;
@@ -10,16 +12,23 @@ int callee(int key, int value, int N) {
   return 0;
 }
 
+int *dummy(int *ptr, int N) {
+  return ptr + N;
+}
+
 __attribute__((noinline))
 int caller(char *s0, int *keys, int N) {
   int key = atoi(s0);
   int value = -1;
+  int *keys2 = dummy(keys, 1);
+
   for (int i = 0; i < N; i++) {
     if (keys[i] == key) {
       value = i;
     }
   }
-  if (callee(key, value, N)) {
+
+  if (callee(key, keys2, value, N)) {
     return value;
   }
   return 0; 

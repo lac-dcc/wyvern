@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-__attribute__((noinline))
+__attribute__((pure))
 int callee(int key, int value, int N) {
   if (key != 0 && value < N) {
     printf("User has access\n");
@@ -10,18 +10,20 @@ int callee(int key, int value, int N) {
   return 0;
 }
 
-__attribute__((noinline))
 int caller(char *s0, int *keys, int N) {
   int key = atoi(s0);
+  int len = strlen(s0);
   int value = -1;
   for (int i = 0; i < N; i++) {
     if (keys[i] == key) {
       value = i;
     }
+    else {
+      len++;
+    }
   }
-  if (callee(key, value, N)) {
-    return value;
-  }
+  callee(key, value, N);
+  foo(len);
   return 0; 
 }
 

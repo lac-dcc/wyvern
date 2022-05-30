@@ -207,7 +207,6 @@ void runRequiredPasses(Module &M) {
   MPM.addPass(createModuleToFunctionPassAdaptor(UnifyFunctionExitNodesPass()));
 
   MPM.run(M, MAM);
-  
 }
 
 bool FindLazyfiableAnalysis::runOnModule(Module &M) {

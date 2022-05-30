@@ -1,28 +1,26 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-__attribute__((noinline))
-int callee(int key, int value, int N) {
+void callee(int key, int value, int N) {
   if (key != 0 && value < N) {
     printf("User has access\n");
-    return 1;
   }
-  return 0;
 }
 
-__attribute__((noinline))
-int caller(char *s0, int *keys, int N) {
+void caller(char *s0, int *keys, int N) {
   int key = atoi(s0);
   int value = -1;
+
+  // write to load used in slice through aliasing pointer
+  int *keys2 = keys;
+  keys2[0] = 10;
+
   for (int i = 0; i < N; i++) {
     if (keys[i] == key) {
       value = i;
     }
   }
-  if (callee(key, value, N)) {
-    return value;
-  }
-  return 0; 
+  callee(key, value, N);
 }
 
 int main() {
