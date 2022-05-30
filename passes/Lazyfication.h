@@ -28,7 +28,7 @@ struct WyvernLazyficationPass : public ModulePass {
    * generated through program slicing.
    *
    */
-  bool lazifyCallsite(CallInst &CI, uint8_t index, Module &M);
+  bool lazifyCallsite(CallInst &CI, uint8_t index, Module &M, AAResults *AA);
 
   bool shouldLazifyCallsitePGO(CallInst *CI, uint8_t argIdx);
 

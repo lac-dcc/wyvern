@@ -1,10 +1,15 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/BasicAliasAnalysis.h"
+#include "llvm/Analysis/CFLSteensAliasAnalysis.h"
 #include "llvm/Analysis/CallGraph.h"
+#include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/LoopInfo.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Utils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
@@ -186,8 +191,8 @@ void removeAttributesFromThunkArgument(Value &V, unsigned int index) {
 }
 
 /**
- * At this point, Function @param F was lazyfied, and one of its arguments
- * This could be either the caller or the callee.
+ * At this point, Function @param F was subject to transformations to lazify
+ * a function call, as either the caller or the callee.
  *
  * In regards to the caller, @param thunkValue is the thunk that is allocated
  * within it and then passed onto a lazyfied callee. However, there may be uses
@@ -201,7 +206,7 @@ void removeAttributesFromThunkArgument(Value &V, unsigned int index) {
  * loading/invocation of the thunk.
  */
 void updateThunkArgUses(Function *F, Value *thunkValue,
-                        Function *slicedFunction,
+                        StructType *thunkStructType, Function *slicedFunction,
                         Value *valueToReplace = nullptr) {
   // We could be adding thunk uses in either the caller or callee
   bool isCallee = (valueToReplace == nullptr);
@@ -230,12 +235,9 @@ void updateThunkArgUses(Function *F, Value *thunkValue,
       // When optimizing the callee, load the function pointer from the thunk
       if (isCallee) {
         Value *thunkFPtrGEP = builder.CreateStructGEP(
-            thunkValue->getType()->getPointerElementType(), thunkValue, 0,
-            "_wyvern_thunk_fptr_addr");
+            thunkStructType, thunkValue, 0, "_wyvern_thunk_fptr_addr");
         Value *thunkFPtrLoad =
-            builder.CreateLoad(thunkValue->getType()
-                                   ->getPointerElementType()
-                                   ->getStructElementType(0),
+            builder.CreateLoad(thunkStructType->getStructElementType(0),
                                thunkFPtrGEP, "_wyvern_thunkfptr");
         thunkCallTarget = thunkFPtrLoad;
       }
@@ -278,7 +280,7 @@ void updateThunkArgUses(Function *F, Value *thunkValue,
  */
 Function *cloneCalleeFunction(Function &Callee, int index,
                               Function &slicedFunction, Value *thunkArg,
-                              Module &M) {
+                              StructType *thunkStructType, Module &M) {
   SmallVector<Type *> argTypes;
   for (auto &arg : Callee.args()) {
     argTypes.push_back(arg.getType());
@@ -312,31 +314,29 @@ Function *cloneCalleeFunction(Function &Callee, int index,
   SmallVector<ReturnInst *, 4> Returns;
   CloneFunctionInto(newCallee, &Callee, vMap,
                     CloneFunctionChangeType::LocalChangesOnly, Returns);
-  updateThunkArgUses(newCallee, newCallee->getArg(index), &slicedFunction);
+  updateThunkArgUses(newCallee, newCallee->getArg(index), thunkStructType,
+                     &slicedFunction);
   verifyFunction(*newCallee);
 
   return newCallee;
 }
 
 bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
-                                            Module &M) {
-  Instruction *lazyfiableArg;
+                                            Module &M, AAResults *AA) {
+  LLVM_DEBUG(dbgs() << "Analyzing callsite: " << CI << " for argument "
+                    << CI.getOperand(index) << "\n");
 
+  Instruction *lazyfiableArg;
   if (!(lazyfiableArg = dyn_cast<Instruction>(CI.getArgOperand(index)))) {
     LLVM_DEBUG(dbgs() << "Argument is not lazyfiable!\n");
     return false;
   }
 
   Function *caller = CI.getParent()->getParent();
-  ProgramSlice slice = ProgramSlice(*lazyfiableArg, *caller, CI);
+  ProgramSlice slice = ProgramSlice(*lazyfiableArg, *caller, CI, AA);
   if (!slice.canOutline()) {
     LLVM_DEBUG(dbgs() << "Cannot lazify argument. Slice is not outlineable!\n");
     return false;
-  }
-
-  ++NumCallsitesLazified;
-  if (lazifiedFunctions.emplace(std::make_pair(caller, lazyfiableArg)).second) {
-    ++NumFunctionsLazified;
   }
 
   Function *callee = CI.getCalledFunction();
@@ -352,30 +352,30 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
     return false;
   }
 
+  ++NumCallsitesLazified;
+  if (lazifiedFunctions.emplace(std::make_pair(caller, lazyfiableArg)).second) {
+    ++NumFunctionsLazified;
+  }
+
   LLVM_DEBUG(dbgs() << "Lazifying: " << *lazyfiableArg << " in func "
                     << caller->getName() << " call to " << callee->getName()
                     << "\n");
 
-  errs() << "Lazifying: " << *lazyfiableArg << " in func " << caller->getName()
-         << " call to " << callee->getName() << ":\n"
-         << CI << "\n";
-
   IRBuilder<> builder(M.getContext());
-  builder.SetInsertPoint(lazyfiableArg);
+  if (isa<PHINode>(lazyfiableArg)) {
+    builder.SetInsertPoint(
+        &*(lazyfiableArg->getParent()->getFirstInsertionPt()));
+  } else {
+    builder.SetInsertPoint(lazyfiableArg);
+  }
 
   Function *thunkFunction, *newCallee;
   AllocaInst *thunkAlloca;
   StructType *thunkStructType;
 
-  /*if (lazyfiedValues.count(lazyfiableArg)) {
-    errs() << "Hit the cache!\n";
-    std::tie(thunkFunction, thunkStructType) = lazyfiedValues[lazyfiableArg];
-  } else {*/
-  std::tie(thunkFunction, thunkStructType) =
+  thunkFunction =
       WyvernLazyficationMemoization ? slice.memoizedOutline() : slice.outline();
-  /*lazyfiedValues[lazyfiableArg] = std::make_pair(thunkFunction,
-thunkStructType);
-}*/
+  thunkStructType = slice.getThunkStructType(WyvernLazyficationMemoization);
 
   if (WyvernLazyficationMemoization) {
     // allocate thunk, initialize it with:
@@ -389,20 +389,18 @@ thunkStructType);
     // }
     thunkAlloca =
         builder.CreateAlloca(thunkStructType, nullptr, "_wyvern_thunk_alloca");
-    Value *thunkFPtrGEP =
-        builder.CreateStructGEP(thunkAlloca->getType()->getPointerElementType(),
-                                thunkAlloca, 0, "_wyvern_thunk_fptr_gep");
+    Value *thunkFPtrGEP = builder.CreateStructGEP(thunkStructType, thunkAlloca,
+                                                  0, "_wyvern_thunk_fptr_gep");
     builder.CreateStore(thunkFunction, thunkFPtrGEP);
-    Value *thunkFlagGEP =
-        builder.CreateStructGEP(thunkAlloca->getType()->getPointerElementType(),
-                                thunkAlloca, 2, "_wyvern_thunk_flag_gep");
+    Value *thunkFlagGEP = builder.CreateStructGEP(thunkStructType, thunkAlloca,
+                                                  2, "_wyvern_thunk_flag_gep");
     builder.CreateStore(builder.getInt1(0), thunkFlagGEP);
 
     uint64_t i = 3;
     for (auto &arg : slice.getOrigFunctionArgs()) {
-      Value *thunkArgGEP = builder.CreateStructGEP(
-          thunkAlloca->getType()->getPointerElementType(), thunkAlloca, i,
-          "_wyvern_thunk_arg_gep_" + arg->getName());
+      Value *thunkArgGEP =
+          builder.CreateStructGEP(thunkStructType, thunkAlloca, i,
+                                  "_wyvern_thunk_arg_gep_" + arg->getName());
       builder.CreateStore(arg, thunkArgGEP);
       ++i;
     }
@@ -416,16 +414,15 @@ thunkStructType);
     // }
     thunkAlloca =
         builder.CreateAlloca(thunkStructType, nullptr, "_wyvern_thunk_alloca");
-    Value *thunkFPtrGEP =
-        builder.CreateStructGEP(thunkAlloca->getType()->getPointerElementType(),
-                                thunkAlloca, 0, "_wyvern_thunk_fptr_gep");
+    Value *thunkFPtrGEP = builder.CreateStructGEP(thunkStructType, thunkAlloca,
+                                                  0, "_wyvern_thunk_fptr_gep");
     builder.CreateStore(thunkFunction, thunkFPtrGEP);
 
     uint64_t i = 1;
     for (auto &arg : slice.getOrigFunctionArgs()) {
-      Value *thunkArgGEP = builder.CreateStructGEP(
-          thunkAlloca->getType()->getPointerElementType(), thunkAlloca, i,
-          "_wyvern_thunk_arg_gep_" + arg->getName());
+      Value *thunkArgGEP =
+          builder.CreateStructGEP(thunkStructType, thunkAlloca, i,
+                                  "_wyvern_thunk_arg_gep_" + arg->getName());
       builder.CreateStore(arg, thunkArgGEP);
       ++i;
     }
@@ -436,8 +433,8 @@ thunkStructType);
   if (previouslyClonedCallee) {
     newCallee = previouslyClonedCallee;
   } else {
-    newCallee =
-        cloneCalleeFunction(*callee, index, *thunkFunction, thunkAlloca, M);
+    newCallee = cloneCalleeFunction(*callee, index, *thunkFunction, thunkAlloca,
+                                    thunkStructType, M);
     clonedCallees[tuple] = newCallee;
   }
 
@@ -445,7 +442,8 @@ thunkStructType);
   CI.setArgOperand(index, thunkAlloca);
   removeAttributesFromThunkArgument(CI, index);
   removeAttributesFromThunkArgument(*newCallee, index);
-  updateThunkArgUses(caller, thunkAlloca, thunkFunction, lazyfiableArg);
+  updateThunkArgUses(caller, thunkAlloca, thunkStructType, thunkFunction,
+                     lazyfiableArg);
 
   uint64_t sliceSize = getNumberOfInsts(*thunkFunction);
   TotalSliceSize += sliceSize;
@@ -482,7 +480,9 @@ bool WyvernLazyficationPass::runOnModule(Module &M) {
         CallInst *CI = cast<CallInst>(&*I);
         for (uint8_t argIdx = 0; argIdx < CI->arg_size(); ++argIdx) {
           if (shouldLazifyCallsitePGO(CI, argIdx)) {
-            changed = lazifyCallsite(*CI, argIdx, M);
+            AAResults *AA =
+                &getAnalysis<AAResultsWrapperPass>(F).getAAResults();
+            changed = lazifyCallsite(*CI, argIdx, M, AA);
             if (changed) {
               break;
             }
@@ -496,20 +496,13 @@ bool WyvernLazyficationPass::runOnModule(Module &M) {
     for (auto &pair : FLA.getLazyfiableCallSites()) {
       CallInst *CI = pair.first;
       uint8_t argIdx = pair.second;
+      Function *caller = CI->getParent()->getParent();
       Function *callee = pair.first->getCalledFunction();
-      if (FLA.getLazyfiablePaths().count(std::make_pair(callee, argIdx)) > 0) {
-        changed = lazifyCallsite(*CI, argIdx, M);
-      }
-    }
-  }
 
-  for (Function &F : M) {
-    for (BasicBlock &BB : F) {
-      for (Instruction &I : BB) {
-        if (!isa<PHINode>(&I)) {
-          continue;
-        }
-        PHINode *PN = cast<PHINode>(&I);
+      AAResults *AA =
+          &getAnalysis<AAResultsWrapperPass>(*caller).getAAResults();
+      if (FLA.getLazyfiablePaths().count(std::make_pair(callee, argIdx)) > 0) {
+        changed = lazifyCallsite(*CI, argIdx, M, AA);
       }
     }
   }
@@ -522,10 +515,16 @@ bool WyvernLazyficationPass::runOnModule(Module &M) {
 }
 
 void WyvernLazyficationPass::getAnalysisUsage(AnalysisUsage &AU) const {
+  AU.addRequired<AssumptionCacheTracker>();
   AU.addRequired<FindLazyfiableAnalysis>();
+  AU.addRequired<TargetLibraryInfoWrapperPass>();
   AU.addRequired<LoopInfoWrapperPass>();
   AU.addRequired<CallGraphWrapperPass>();
   AU.addRequired<DominatorTreeWrapperPass>();
+  AU.addRequired<BasicAAWrapperPass>();
+  AU.addRequired<GlobalsAAWrapperPass>();
+  AU.addRequired<CFLSteensAAWrapperPass>();
+  AU.addRequired<AAResultsWrapperPass>();
 }
 
 static llvm::RegisterStandardPasses RegisterWyvernLazification(
@@ -533,6 +532,11 @@ static llvm::RegisterStandardPasses RegisterWyvernLazification(
     [](const llvm::PassManagerBuilder &Builder,
        llvm::legacy::PassManagerBase &PM) {
       PM.add(new WyvernLazyficationPass());
+      // Since we explicitly run LCSSA during our analyses, there may be
+      // leftover invalid PHINodes created by it in the program. We must then
+      // run -inst-combine explicitly to remove them (as LLVM itself does behind
+      // the scenes).
+      PM.add(llvm::createInstructionCombiningPass());
     });
 
 char WyvernLazyficationPass::ID = 0;

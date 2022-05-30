@@ -9,6 +9,8 @@
 #include <utility>
 
 #include "llvm/ADT/Statistic.h"
+#include "llvm/Analysis/AliasSetTracker.h"
+#include "llvm/Analysis/CaptureTracking.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/PostDominators.h"
@@ -32,8 +34,8 @@ STATISTIC(InvalidSlices,
 
 using namespace llvm;
 
-const BasicBlock *getController(const BasicBlock *BB, DominatorTree &DT,
-                                PostDominatorTree &PDT) {
+static const BasicBlock *getController(const BasicBlock *BB, DominatorTree &DT,
+                                       PostDominatorTree &PDT) {
   const DomTreeNode *dom_node = DT.getNode(BB);
   while (dom_node) {
     const BasicBlock *dom_BB = dom_node->getBlock();
@@ -46,7 +48,7 @@ const BasicBlock *getController(const BasicBlock *BB, DominatorTree &DT,
   return NULL;
 }
 
-const Value *getGate(const BasicBlock *BB) {
+static const Value *getGate(const BasicBlock *BB) {
   const Value *condition;
 
   const Instruction *terminator = BB->getTerminator();
@@ -62,7 +64,7 @@ const Value *getGate(const BasicBlock *BB) {
   return condition;
 }
 
-const std::unordered_map<const BasicBlock *, SmallVector<const Value *>>
+static const std::unordered_map<const BasicBlock *, SmallVector<const Value *>>
 computeGates(Function &F) {
   std::unordered_map<const BasicBlock *, SmallVector<const Value *>> gates;
   DominatorTree DT(F);
@@ -95,7 +97,7 @@ computeGates(Function &F) {
   return gates;
 }
 
-std::tuple<std::set<const BasicBlock *>, std::set<const Value *>>
+static std::tuple<std::set<const BasicBlock *>, std::set<const Value *>>
 get_data_dependences_for(
     Instruction &I,
     std::unordered_map<const BasicBlock *, SmallVector<const Value *>> &gates) {
@@ -137,7 +139,7 @@ get_data_dependences_for(
   return std::make_tuple(BBs, deps);
 }
 
-bool hasAddressTaken(const Instruction *AI, TypeSize AllocSize) {
+static bool hasAddressTaken(const Instruction *AI, TypeSize AllocSize) {
   const DataLayout &DL =
       AI->getParent()->getParent()->getParent()->getDataLayout();
   for (const User *U : AI->users()) {
@@ -237,7 +239,7 @@ bool hasAddressTaken(const Instruction *AI, TypeSize AllocSize) {
  *
  */
 ProgramSlice::ProgramSlice(Instruction &Initial, Function &F,
-                           CallInst &CallSite) {
+                           CallInst &CallSite, AAResults *AA) {
   assert(Initial.getParent()->getParent() == &F &&
          "Slicing instruction from different function!");
 
@@ -261,10 +263,59 @@ ProgramSlice::ProgramSlice(Instruction &Initial, Function &F,
   _parentFunction = &F;
   _BBsInSlice = BBsInSlice;
   _CallSite = &CallSite;
+  _AA = AA;
+
+  // We need to pre-compute struct types, because if we build it everytime
+  // it's needed, LLVM creates multiple types with the same structure but
+  // different names.
+  _thunkStructType = computeStructType(false /*memo*/);
+  _memoizedThunkStructType = computeStructType(true /*memo*/);
 
   computeAttractorBlocks();
 
   LLVM_DEBUG(printSlice());
+}
+
+StructType *ProgramSlice::computeStructType(bool memo) {
+  Module *M = _initial->getParent()->getParent()->getParent();
+  LLVMContext &Ctx = M->getContext();
+
+  StructType *thunkStructType = StructType::create(Ctx);
+  PointerType *thunkStructPtrType = PointerType::get(thunkStructType, 0);
+  FunctionType *delegateFunctionType =
+      FunctionType::get(_initial->getType(), {thunkStructPtrType}, false);
+  SmallVector<Type *> thunkTypes;
+  if (memo) {
+    // Memoized thunks have the form:
+    //   T (fptr)(struct thunk *thk);
+    //   T memo_val;
+    //   bool memo_flag;
+    //   ... (environment)
+    thunkTypes = {delegateFunctionType->getPointerTo(),
+                  delegateFunctionType->getReturnType(),
+                  IntegerType::get(Ctx, 1)};
+  } else {
+    // Non-memoized thunks have the form:
+    //  T (fptr)(struct thunk *thk);
+    //  ... (environment)
+    thunkTypes = {delegateFunctionType->getPointerTo()};
+  }
+
+  for (auto &arg : _depArgs) {
+    thunkTypes.push_back(arg->getType());
+  }
+
+  thunkStructType->setBody(thunkTypes);
+  thunkStructType->setName("_wyvern_thunk_type");
+
+  return thunkStructType;
+}
+
+StructType *ProgramSlice::getThunkStructType(bool memo) {
+  if (memo) {
+    return _memoizedThunkStructType;
+  }
+  return _thunkStructType;
 }
 
 void ProgramSlice::printSlice() {
@@ -511,16 +562,75 @@ void ProgramSlice::rerouteBranches(Function *F) {
 bool ProgramSlice::canOutline() {
   DominatorTree DT(*_parentFunction);
   LoopInfo LI = LoopInfo(DT);
+  AliasSetTracker AST(*_AA);
+
+  // Collect all memory locations referenced by loads/geps in the slice
+  SmallVector<const MemoryLocation *, 32> memLocs;
+  for (const Instruction *I : _instsInSlice) {
+    if (const LoadInst *LI = dyn_cast<LoadInst>(I)) {
+      llvm::Optional<MemoryLocation> ML = MemoryLocation::getOrNone(LI);
+      if (ML.hasValue()) {
+        memLocs.push_back(&ML.getValue());
+      }
+    } else if (const GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(I)) {
+      llvm::Optional<MemoryLocation> ML = MemoryLocation::getOrNone(GEP);
+      if (ML.hasValue()) {
+        memLocs.push_back(&ML.getValue());
+      }
+    }
+  }
+
+  // Build alias sets for stores and function calls in the function.
+  // Note that we only care about memory locations that are part of the
+  // slice, or which are loaded by loads in the slice.
+  for (BasicBlock &BB : *_parentFunction) {
+    for (Instruction &I : BB) {
+      if (StoreInst *SI = dyn_cast<StoreInst>(&I)) {
+        AST.add(SI);
+      } else if (CallBase *CB = dyn_cast<CallBase>(&I)) {
+        for (auto *ML : memLocs) {
+          if (_AA->getModRefInfo(CB, *ML) == ModRefInfo::Mod) {
+            AST.add(CB);
+          }
+        }
+      }
+    }
+  }
+
   for (const Instruction *I : _instsInSlice) {
     if (I->mayThrow()) {
       errs() << "Cannot outline because inst may throw: " << *I << "\n";
       return false;
     }
 
-    else if (I->mayReadOrWriteMemory()) {
-      errs() << "Cannot outline because inst may read or write to memory: "
-             << *I << "\n";
-      return false;
+    // For instructions that may read or write to memory, we need some special
+    // care to avoid load/store reordering and/or side effects.
+    if (I->mayReadOrWriteMemory()) {
+      if (const LoadInst *LI = dyn_cast<LoadInst>(I)) {
+        // For loads, we invalidate outlining if its address can be modified.
+        // This is possible if the memory location pointed to by the load is
+        // written/modified by any possibly aliasing pointer or clobbering
+        // function call.
+        if (AST.getAliasSetFor(MemoryLocation::get(LI)).isMod()) {
+          errs()
+              << "Cannot outline slice because load address can be modified: "
+              << *LI << "\n";
+          return false;
+        }
+
+      } else if (const CallBase *CB = dyn_cast<CallBase>(I)) {
+        // For function calls, if the call has any side effects (as in, is not
+        // read-only), we can't outline the slice.
+        if (!_AA->onlyReadsMemory(CB->getCalledFunction())) {
+          errs() << "Cannot outline because call may write to memory: " << *CB
+                 << "\n";
+          return false;
+        }
+      } else {
+        errs() << "Cannot outline because inst may read or write to memory: "
+               << *I << "\n";
+        return false;
+      }
     }
 
     else if (!I->willReturn()) {
@@ -535,6 +645,17 @@ bool ProgramSlice::canOutline() {
         errs() << "Cannot outline slice because alloca has address taken:"
                << *AI << "\n";
         return false;
+      }
+    }
+
+    for (const Value *arg : _CallSite->args()) {
+      if (arg->getType()->isPointerTy() && I->getType()->isPointerTy()) {
+        if (_AA->alias(arg, I) != AliasResult::NoAlias) {
+          errs() << "Cannot outline slice because pointer used in slice is "
+                    "passed as argument to callee.\nPointer: "
+                 << *I << "\nArgument: " << *arg << "\n";
+          return false;
+        }
       }
     }
   }
@@ -729,6 +850,7 @@ void ProgramSlice::insertLoadForThunkParams(Function *F, bool memo) {
 
   BasicBlock &entry = F->getEntryBlock();
   Argument *thunkStructPtr = F->arg_begin();
+  StructType *thunkStructType = getThunkStructType(memo);
 
   assert(isa<PointerType>(thunkStructPtr->getType()) &&
          "Sliced function's first argument does not have struct pointer type!");
@@ -739,13 +861,11 @@ void ProgramSlice::insertLoadForThunkParams(Function *F, bool memo) {
   // taking up two slots
   unsigned int i = memo ? 3 : 1;
   for (auto &arg : _depArgs) {
-    Value *new_arg_addr = builder.CreateStructGEP(
-        thunkStructPtr->getType()->getPointerElementType(), thunkStructPtr, i,
-        "_wyvern_arg_addr_" + arg->getName());
+    Value *new_arg_addr =
+        builder.CreateStructGEP(thunkStructType, thunkStructPtr, i,
+                                "_wyvern_arg_addr_" + arg->getName());
     Value *new_arg =
-        builder.CreateLoad(thunkStructPtr->getType()
-                               ->getPointerElementType()
-                               ->getStructElementType(i),
+        builder.CreateLoad(thunkStructType->getStructElementType(i),
                            new_arg_addr, "_wyvern_arg_" + arg->getName());
     arg->replaceUsesWithIf(new_arg, [F](Use &U) {
       auto *UserI = dyn_cast<Instruction>(U.getUser());
@@ -762,24 +882,10 @@ void ProgramSlice::insertLoadForThunkParams(Function *F, bool memo) {
  * encapsulates the computation of the original value in
  * regards to which the slice was created.
  */
-std::tuple<Function *, StructType *> ProgramSlice::outline() {
-  Module *M = _initial->getParent()->getParent()->getParent();
-  LLVMContext &Ctx = M->getContext();
-
-  StructType *thunkStructType = StructType::create(Ctx);
-  PointerType *thunkStructPtrType = PointerType::get(thunkStructType, 0);
-  FunctionType *thunkFunctionType =
-      FunctionType::get(_initial->getType(), {thunkStructPtrType}, false);
-  SmallVector<Type *> thunkTypes = {thunkFunctionType->getPointerTo()};
-
-  for (auto type : getInputArgTypes()) {
-    thunkTypes.push_back(type);
-  }
-
-  thunkStructType->setBody(thunkTypes);
-  thunkStructType->setName("_wyvern_thunk_type");
-
-  FunctionType *FT =
+Function *ProgramSlice::outline() {
+  StructType *thunkStructType = getThunkStructType(false);
+  PointerType *thunkStructPtrType = thunkStructType->getPointerTo();
+  FunctionType *delegateFunctionType =
       FunctionType::get(_initial->getType(), {thunkStructPtrType}, false);
 
   std::random_device rd;
@@ -790,8 +896,9 @@ std::tuple<Function *, StructType *> ProgramSlice::outline() {
   std::string functionName =
       "_wyvern_slice_" + _initial->getParent()->getParent()->getName().str() +
       "_" + _initial->getName().str() + std::to_string(random_num);
-  Function *F =
-      Function::Create(FT, Function::ExternalLinkage, functionName, M);
+  Function *F = Function::Create(
+      delegateFunctionType, Function::ExternalLinkage, functionName,
+      _initial->getParent()->getParent()->getParent());
 
   F->arg_begin()->setName("_wyvern_thunkptr");
 
@@ -805,17 +912,16 @@ std::tuple<Function *, StructType *> ProgramSlice::outline() {
   verifyFunction(*F);
   printFunctions(F);
 
-  return {F, thunkStructType};
+  return F;
 }
 
 void ProgramSlice::addMemoizationCode(Function *F, ReturnInst *new_ret) {
+  StructType *thunkStructType = getThunkStructType(true);
   IRBuilder<> builder(F->getContext());
+  LLVMContext &Ctx = F->getParent()->getContext();
 
   assert(isa<PointerType>(F->arg_begin()->getType()) &&
          "Memoized function does not have PointerType argument!\n");
-
-  // boilerplate constants needed to index structs/pointers
-  LLVMContext &Ctx = F->getParent()->getContext();
 
   // create new entry block and block to insert memoed return
   BasicBlock *oldEntry = &F->getEntryBlock();
@@ -824,22 +930,20 @@ void ProgramSlice::addMemoizationCode(Function *F, ReturnInst *new_ret) {
   BasicBlock *memoRetBlock =
       BasicBlock::Create(Ctx, "_wyvern_memo_ret", F, oldEntry);
 
-  // load addresses and values for memo flag
+  // load addresses and values for memo flag and memoed value
   Value *argValue = F->arg_begin();
   builder.SetInsertPoint(newEntry);
-  Value *memoedValueGEP =
-      builder.CreateStructGEP(argValue->getType()->getPointerElementType(),
-                              argValue, 1, "_wyvern_memo_val_addr");
-  LoadInst *memoedValueLoad = builder.CreateLoad(
-      argValue->getType()->getPointerElementType()->getStructElementType(1),
-      memoedValueGEP, "_wyvern_memo_val");
+  Value *memoedValueGEP = builder.CreateStructGEP(thunkStructType, argValue, 1,
+                                                  "_wyvern_memo_val_addr");
+  LoadInst *memoedValueLoad =
+      builder.CreateLoad(thunkStructType->getStructElementType(1),
+                         memoedValueGEP, "_wyvern_memo_val");
 
-  Value *memoFlagGEP =
-      builder.CreateStructGEP(argValue->getType()->getPointerElementType(),
-                              argValue, 2, "_wyvern_memo_flag_addr");
-  LoadInst *memoFlagLoad = builder.CreateLoad(
-      argValue->getType()->getPointerElementType()->getStructElementType(2),
-      memoFlagGEP, "_wyvern_memo_flag");
+  Value *memoFlagGEP = builder.CreateStructGEP(thunkStructType, argValue, 2,
+                                               "_wyvern_memo_flag_addr");
+  LoadInst *memoFlagLoad =
+      builder.CreateLoad(thunkStructType->getStructElementType(2), memoFlagGEP,
+                         "_wyvern_memo_flag");
 
   // add if (memoFlag == true) { return memo_val; }
   Value *toBool = builder.CreateTruncOrBitCast(
@@ -863,24 +967,11 @@ void ProgramSlice::addMemoizationCode(Function *F, ReturnInst *new_ret) {
  * code so that the function saves its evaluated value and
  * returns it on successive executions.
  */
-std::tuple<Function *, StructType *> ProgramSlice::memoizedOutline() {
-  Module *M = _initial->getParent()->getParent()->getParent();
-  LLVMContext &Ctx = M->getContext();
-
-  StructType *thunkStructType = StructType::create(Ctx);
-  PointerType *thunkStructPtrType = PointerType::get(thunkStructType, 0);
-  FunctionType *thunkFunctionType =
+Function *ProgramSlice::memoizedOutline() {
+  StructType *thunkStructType = getThunkStructType(true);
+  PointerType *thunkStructPtrType = thunkStructType->getPointerTo();
+  FunctionType *delegateFunctionType =
       FunctionType::get(_initial->getType(), {thunkStructPtrType}, false);
-  SmallVector<Type *> thunkTypes = {thunkFunctionType->getPointerTo(),
-                                    thunkFunctionType->getReturnType(),
-                                    IntegerType::get(Ctx, 1)};
-
-  for (auto &arg : _depArgs) {
-    thunkTypes.push_back(arg->getType());
-  }
-
-  thunkStructType->setBody(thunkTypes);
-  thunkStructType->setName("_wyvern_thunk_type");
 
   std::random_device rd;
   std::mt19937 mt(rd());
@@ -891,8 +982,9 @@ std::tuple<Function *, StructType *> ProgramSlice::memoizedOutline() {
       "_wyvern_slice_memo_" +
       _initial->getParent()->getParent()->getName().str() + "_" +
       _initial->getName().str() + std::to_string(random_num);
-  Function *F = Function::Create(thunkFunctionType, Function::ExternalLinkage,
-                                 functionName, M);
+  Function *F = Function::Create(
+      delegateFunctionType, Function::ExternalLinkage, functionName,
+      _initial->getParent()->getParent()->getParent());
 
   F->arg_begin()->setName("_wyvern_thunkptr");
 
@@ -910,5 +1002,5 @@ std::tuple<Function *, StructType *> ProgramSlice::memoizedOutline() {
 
   printFunctions(F);
 
-  return {F, thunkStructType};
+  return F;
 }
