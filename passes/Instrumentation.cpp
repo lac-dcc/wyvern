@@ -2,6 +2,7 @@
 
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 
 #include "FindLazyfiable.h"
@@ -81,32 +82,6 @@ void WyvernInstrumentationPass::InstrumentCallSites(
       CallInst *initCall =
           builder.CreateCall(initCallFun, {callerName, callInstId, numArgs});
       updateDebugInfo(initCall, F);
-
-      /*if (CallInst *CI = dyn_cast<CallInst>(CB)) {
-        builder.SetInsertPoint(CB->getNextNode());
-        CallInst *endCall = builder.CreateCall(endCallFun, {});
-        updateDebugInfo(endCall, F);
-      }
-
-      // for invokes, instrument both the regular return and the unwind
-      // destination
-      else if (InvokeInst *II = dyn_cast<InvokeInst>(CB)) {
-        // if insertion point already contains a call to _wyinstr_end_call,
-        // don't duplicate calls
-        if (shouldInstrumentInvokePath(II->getUnwindDest())) {
-          builder.SetInsertPoint(II->getUnwindDest(),
-                                 II->getUnwindDest()->getFirstInsertionPt());
-          CallInst *endCall = builder.CreateCall(endCallFun, {});
-          updateDebugInfo(endCall, F);
-        }
-
-        if (shouldInstrumentInvokePath(II->getNormalDest())) {
-          builder.SetInsertPoint(II->getNormalDest(),
-                                 II->getNormalDest()->getFirstInsertionPt());
-          CallInst *endCall2 = builder.CreateCall(endCallFun, {});
-          updateDebugInfo(endCall2, F);
-        }
-      }*/
     }
   }
 }
