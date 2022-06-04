@@ -43,9 +43,8 @@ void FindLazyfiableAnalysis::DFS(BasicBlock *first, BasicBlock *exit,
 
     if (cur == exit) {
       auto pair = std::make_pair(cur->getParent(), index);
-      _lazyPathsStats.insert(pair);
-      _lazyFunctionsStats.insert(cur->getParent());
-      _lazyfiablePaths.insert(std::make_pair(cur->getParent(), index));
+      _promisingFunctions.insert(cur->getParent());
+      _promisingFunctionArgs.insert(pair);
       return;
     }
 
@@ -99,19 +98,16 @@ void FindLazyfiableAnalysis::analyzeCall(CallInst *CI) {
       unsigned int index = CI->getArgOperandNo(&arg);
       if (isArgumentComplex(*I)) {
         auto pair = std::make_pair(Callee, index);
-        _lazyfiableCallSitesStats[pair] += 1;
+        _lazyfiableCallSitesStats.insert(pair);
         _lazyfiableCallSites.insert(std::make_pair(CI, index));
       }
     }
   }
 }
 
-/**
- * Removes dummy functions in @param dummyFunctions from the Module.
- * These functions are added by addMissingUses.
- *
- */
-void removeDummyFunctions(std::set<Function *> dummyFunctions) {
+/// Removes dummy functions in dummyFunctions from the Module.
+/// These functions are added by addMissingUses.
+static void removeDummyFunctions(std::set<Function *> dummyFunctions) {
   for (auto &F : dummyFunctions) {
     for (auto User : F->users()) {
       CallInst *dummyFunCall = (CallInst *)User;
@@ -121,13 +117,10 @@ void removeDummyFunctions(std::set<Function *> dummyFunctions) {
   }
 }
 
-/**
- * Creates a dummy function with signature "void dummy_fun(Type arg)"
- * for a given @param Type, and inserts it into the module, so it
- * can be used to simulate a use of a value of that given type.
- *
- */
-FunctionCallee getDummyFunctionForType(Module &M, Type *Type) {
+/// Creates a dummy function with signature "void dummy_fun(Type arg)"
+/// for a given @param Type, and inserts it into the module, so it
+/// can be used to simulate a use of a value of that given type.
+static FunctionCallee getDummyFunctionForType(Module &M, Type *Type) {
   LLVMContext &Ctx = M.getContext();
   std::string typeName;
   raw_string_ostream typeNameOs(typeName);
@@ -170,19 +163,18 @@ std::set<Function *> FindLazyfiableAnalysis::addMissingUses(Module &M,
   return dummyFunctions;
 }
 
-/**
- * To find the most optimization opportunities, we require the IR to have been
- * transformed by the following passes:
- *   -mem2reg ->        promotes memory to registers
- *   -function-attrs -> infers attributes for functions (such asreadonly)
- *   -lcssa ->          transforms the program to loop-ssa form
- *   -loop-simplify ->  simplifies loops to cannonical forms
- *   -mergereturn ->    merges multiple function returns into one
- *
- * While it is easy enough to do so from `opt`, when running from `clang` we
- * cannot manipulate when/which passes run, therefore, we run them here manually
- * to guarantee that the IR is in the format we expect.
- */
+///
+/// To find the most optimization opportunities, we require the IR to have been
+/// transformed by the following passes:
+///   -mem2reg ->        promotes memory to registers
+///   -function-attrs -> infers attributes for functions (such as readonly)
+///   -lcssa ->          transforms the program to loop-ssa form
+///   -loop-simplify ->  simplifies loops to cannonical forms
+///   -mergereturn ->    merges multiple function returns into one
+///
+/// While it is easy enough to do so from `opt`, when running from `clang` we
+/// cannot manipulate when/which passes run, therefore, we run them here manually
+/// to guarantee that the IR is in the format we expect.
 void runRequiredPasses(Module &M) {
   LoopAnalysisManager LAM;
   FunctionAnalysisManager FAM;
@@ -240,20 +232,20 @@ void FindLazyfiableAnalysis::dump_results() {
   raw_fd_ostream outfile("lazyfiable.csv", ec);
 
   outfile << "function,lazyArg\n";
-  for (auto &entry : _lazyPathsStats) {
+  for (auto &entry : _promisingFunctionArgs) {
     outfile << entry.first->getName() << "," << entry.second << "\n";
   }
 
   outfile << "\n\nfunction,arg,callSites\n";
   for (auto &entry : _lazyfiableCallSitesStats) {
-    outfile << entry.first.first->getName() << "," << entry.first.second << ","
+    outfile << entry.first->getName() << "," << entry.second << ","
             << entry.second << "\n";
   }
 
   outfile << "\n\nfunctionsInBoth\n";
   for (auto &entry : _lazyfiableCallSitesStats) {
-    if (_lazyPathsStats.count(entry.first) > 0) {
-      outfile << entry.first.first->getName() << "," << entry.first.second
+    if (_promisingFunctionArgs.count(entry) > 0) {
+      outfile << entry.first->getName() << "," << entry.second
               << "\n";
     }
   }

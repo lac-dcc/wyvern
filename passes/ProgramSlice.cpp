@@ -34,6 +34,7 @@ STATISTIC(InvalidSlices,
 
 using namespace llvm;
 
+/// Returns the block whose predicate should control the phi-functions in BB
 static const BasicBlock *getController(const BasicBlock *BB, DominatorTree &DT,
                                        PostDominatorTree &PDT) {
   const DomTreeNode *dom_node = DT.getNode(BB);
@@ -48,6 +49,8 @@ static const BasicBlock *getController(const BasicBlock *BB, DominatorTree &DT,
   return NULL;
 }
 
+/// Returns the predicate of the given basic block, which will be used to gate
+/// another basic block's phi-functions.
 static const Value *getGate(const BasicBlock *BB) {
   const Value *condition;
 
@@ -64,6 +67,9 @@ static const Value *getGate(const BasicBlock *BB) {
   return condition;
 }
 
+/// Computes the gates for all basic blocks in the slice. The data structure
+/// holding the gates data is a map of each basic block to a vector of its
+/// gates.
 static const std::unordered_map<const BasicBlock *, SmallVector<const Value *>>
 computeGates(Function &F) {
   std::unordered_map<const BasicBlock *, SmallVector<const Value *>> gates;
@@ -97,6 +103,11 @@ computeGates(Function &F) {
   return gates;
 }
 
+/// Computes the backwards data dependences for the given instruction, to
+/// compute which instructions should be part of the slice. Using the
+/// phi-function gate information contained in gates, control dependencies can
+/// also be tracked as data dependences. Thus, this function is enough to
+/// compute all dependencies necessary to building a slice.
 static std::tuple<std::set<const BasicBlock *>, std::set<const Value *>>
 get_data_dependences_for(
     Instruction &I,
@@ -139,6 +150,9 @@ get_data_dependences_for(
   return std::make_tuple(BBs, deps);
 }
 
+/// Returns whether an alloca instruction has its address taken at any point
+/// within the slice's parent function. TODO: Can possibly be deprecated after
+/// memory safety analysis was implemented.
 static bool hasAddressTaken(const Instruction *AI, TypeSize AllocSize) {
   const DataLayout &DL =
       AI->getParent()->getParent()->getParent()->getDataLayout();
@@ -233,11 +247,6 @@ static bool hasAddressTaken(const Instruction *AI, TypeSize AllocSize) {
   return false;
 }
 
-/**
- * Creates a representation of a backwards slice of function @param F in
- * regards to instruction @param I.
- *
- */
 ProgramSlice::ProgramSlice(Instruction &Initial, Function &F,
                            CallInst &CallSite, AAResults *AA) {
   assert(Initial.getParent()->getParent() == &F &&
@@ -276,6 +285,8 @@ ProgramSlice::ProgramSlice(Instruction &Initial, Function &F,
   LLVM_DEBUG(printSlice());
 }
 
+/// Computes the layout of the struct type that should be used to lazify
+/// instances of this delegate function.
 StructType *ProgramSlice::computeStructType(bool memo) {
   Module *M = _initial->getParent()->getParent()->getParent();
   LLVMContext &Ctx = M->getContext();
@@ -318,6 +329,7 @@ StructType *ProgramSlice::getThunkStructType(bool memo) {
   return _thunkStructType;
 }
 
+/// Prints the slice. Used for debugging.
 void ProgramSlice::printSlice() {
   LLVM_DEBUG(dbgs() << "\n\n ==== Slicing function "
                     << _parentFunction->getName() << " with size "
@@ -340,12 +352,16 @@ void ProgramSlice::printSlice() {
   LLVM_DEBUG(dbgs() << "============= \n\n");
 }
 
+/// Print original and sliced function. Used for debugging.
 void ProgramSlice::printFunctions(Function *F) {
   LLVM_DEBUG(dbgs() << "\n======== ORIGINAL FUNCTION ==========\n"
                     << *_parentFunction);
   LLVM_DEBUG(dbgs() << "\n======== SLICED FUNCTION ==========\n" << *F);
 }
 
+/// Computes the attractor blocks (first dominator) for each basic block in the
+/// original function. The map of basic blocks to their attractors is used to
+/// reroute control flow in the outlined delegate function.
 void ProgramSlice::computeAttractorBlocks() {
   PostDominatorTree PDT;
   PDT.recalculate(*_parentFunction);
@@ -376,6 +392,8 @@ void ProgramSlice::computeAttractorBlocks() {
   _attractors = attractors;
 }
 
+/// Adds branches from immediate dominators which existed in the original
+/// function to the slice.
 void ProgramSlice::addDomBranches(DomTreeNode *cur, DomTreeNode *parent,
                                   std::set<DomTreeNode *> &visited) {
   if (_BBsInSlice.count(cur->getBlock())) {
@@ -397,10 +415,10 @@ void ProgramSlice::addDomBranches(DomTreeNode *cur, DomTreeNode *parent,
   }
 }
 
-/* When cloning PHINodes from the original function, some PHIs may have leftover
- * incoming blocks which were not included in the slice. Therefore, these blocks
- * are now invalid, as they are not predecessors of the new PHI. This function
- * removes these. */
+/// When cloning PHINodes from the original function, some PHIs may have
+/// leftover incoming blocks which were not included in the slice. Therefore,
+/// these blocks are now invalid, as they are not predecessors of the new PHI.
+/// This function removes these.
 void updatePHINodes(Function *F) {
   for (BasicBlock &BB : *F) {
     std::set<BasicBlock *> preds(pred_begin(&BB), pred_end(&BB));
@@ -420,6 +438,9 @@ void updatePHINodes(Function *F) {
   }
 }
 
+/// Reroutes branches in the slice, to properly build the control flow of the
+/// delegate function, once instructions and basic blocks from the original
+/// function have been possibly removed.
 void ProgramSlice::rerouteBranches(Function *F) {
   DominatorTree DT(*_parentFunction);
   std::set<DomTreeNode *> visited;
@@ -678,10 +699,10 @@ bool ProgramSlice::canOutline() {
     return false;
   }
 
-  /* LCSSA may insert PHINodes with only a single incoming block. In some cases,
-   * these PHINodes can be added into the slice, but the conditional for the
-   * loop that generated them is not. When eliminating the PHINode, we'd
-   * generate invalid code, so we avoid optimizing these cases temporarily. */
+  // LCSSA may insert PHINodes with only a single incoming block. In some cases,
+  // these PHINodes can be added into the slice, but the conditional for the
+  // loop that generated them is not. When eliminating the PHINode, we'd
+  // generate invalid code, so we avoid optimizing these cases temporarily.
   if (PHINode *PN = dyn_cast<PHINode>(_initial)) {
     if (PN->getNumIncomingValues() == 1) {
       BasicBlock *incBB = PN->getIncomingBlock(0);
@@ -694,13 +715,6 @@ bool ProgramSlice::canOutline() {
   return true;
 }
 
-/**
- * Returns the arguments from the original function which
- * are part of the slice. Is used externally to match formal
- * parameters with actual parameters when generating calls to
- * outlined slice functions.
- *
- */
 SmallVector<Value *> ProgramSlice::getOrigFunctionArgs() {
   SmallVector<Value *> args;
   for (auto &arg : _depArgs) {
@@ -709,12 +723,9 @@ SmallVector<Value *> ProgramSlice::getOrigFunctionArgs() {
   return args;
 }
 
-/**
- * Inserts a new BasicBlock in Function @param F, corresponding
- * to the @param originalBB from the original function being
- * sliced.
- *
- */
+/// Inserts a new BasicBlock in Function @param F, corresponding
+/// to the @param originalBB from the original function being
+/// sliced.
 void ProgramSlice::insertNewBB(const BasicBlock *originalBB, Function *F) {
   auto originalName = originalBB->getName();
   std::string newBBName = "sliceclone_" + originalName.str();
@@ -724,23 +735,17 @@ void ProgramSlice::insertNewBB(const BasicBlock *originalBB, Function *F) {
   _newToOrigBBmap.insert(std::make_pair(newBB, originalBB));
 }
 
-/**
- * Populates function @param F with BasicBlocks, corresponding
- * to the BBs in the original function being sliced which
- * contained instructions included in the slice.
- *
- */
+/// Populates function @param F with BasicBlocks, corresponding
+/// to the BBs in the original function being sliced which
+/// contained instructions included in the slice.
 void ProgramSlice::populateFunctionWithBBs(Function *F) {
   for (const BasicBlock *BB : _BBsInSlice) {
     insertNewBB(BB, F);
   }
 }
 
-/**
- * Adds slice instructions to function @param F, corresponding
- * to instructions in the original function.
- *
- */
+/// Adds slice instructions to function @param F, corresponding
+/// to instructions in the original function.
 void ProgramSlice::populateBBsWithInsts(Function *F) {
   for (BasicBlock &BB : *_parentFunction) {
     for (Instruction &origInst : BB) {
@@ -754,12 +759,9 @@ void ProgramSlice::populateBBsWithInsts(Function *F) {
   }
 }
 
-/**
- * Fixes the instruction/argument/BB uses in new function @param F,
- * to use their corresponding versions in the sliced function, rather
- * than the originals from whom they were cloned.
- *
- */
+/// Fixes the instruction/argument/BB uses in new function @param F,
+/// to use their corresponding versions in the sliced function, rather
+/// than the originals from whom they were cloned.
 void ProgramSlice::reorganizeUses(Function *F) {
   IRBuilder<> builder(F->getContext());
 
@@ -782,12 +784,10 @@ void ProgramSlice::reorganizeUses(Function *F) {
   }
 }
 
-/**
- * Adds terminating branches to BasicBlocks in function @param F,
- * for BBs whose branches were not included in the slice but
- * which are necessary to replicate the control flow of the
- * original function.
- */
+/// Adds terminating branches to BasicBlocks in function @param F,
+/// for BBs whose branches were not included in the slice but
+/// which are necessary to replicate the control flow of the
+/// original function.
 void ProgramSlice::addMissingTerminators(Function *F) {
   for (BasicBlock &BB : *F) {
     if (BB.getTerminator() == nullptr) {
@@ -800,11 +800,11 @@ void ProgramSlice::addMissingTerminators(Function *F) {
   }
 }
 
-/**
- * Reorders basic blocks in the new function @param F, to make
- * sure that the sliced function's entry block (the only one
- * with no predecessors) is first in the layout.
- */
+/// Reorders basic blocks in the new function @param F, to make
+/// sure that the sliced function's entry block (the only one
+/// with no predecessors) is first in the layout. This is necessary
+/// because LLVM assumes the first block of a function is always its
+/// entry block.
 void ProgramSlice::reorderBlocks(Function *F) {
   BasicBlock *realEntry = nullptr;
   for (BasicBlock &BB : *F) {
@@ -815,11 +815,8 @@ void ProgramSlice::reorderBlocks(Function *F) {
   realEntry->moveBefore(&F->getEntryBlock());
 }
 
-/**
- * Adds a return instruction to function @param F, which returns
- * the value that is computed by the sliced function.
- *
- */
+/// Adds a return instruction to function @param F, which returns
+/// the value that is computed by the sliced function.
 ReturnInst *ProgramSlice::addReturnValue(Function *F) {
   BasicBlock *exit = _Imap[_initial]->getParent();
 
@@ -831,20 +828,8 @@ ReturnInst *ProgramSlice::addReturnValue(Function *F) {
                             exit);
 }
 
-/**
- * Returns the types of the original function's formal parameters
- * _which are included in the slice_, so the sliced function's
- * signature can be created to match it.
- *
- */
-SmallVector<Type *> ProgramSlice::getInputArgTypes() {
-  SmallVector<Type *> argTypes;
-  for (const Argument *A : _depArgs) {
-    argTypes.emplace_back(A->getType());
-  }
-  return argTypes;
-}
-
+/// Updates the delegate function's code to make use of parameters provided by
+/// the environment in its thunk, rather than the original function's values.
 void ProgramSlice::insertLoadForThunkParams(Function *F, bool memo) {
   IRBuilder<> builder(F->getContext());
 
@@ -877,11 +862,9 @@ void ProgramSlice::insertLoadForThunkParams(Function *F, bool memo) {
   }
 }
 
-/**
- * Outlines the given slice into a standalone Function, which
- * encapsulates the computation of the original value in
- * regards to which the slice was created.
- */
+/// Outlines the given slice into a standalone Function, which
+/// encapsulates the computation of the original value in
+/// regards to which the slice was created.
 Function *ProgramSlice::outline() {
   StructType *thunkStructType = getThunkStructType(false);
   PointerType *thunkStructPtrType = thunkStructType->getPointerTo();
@@ -915,6 +898,9 @@ Function *ProgramSlice::outline() {
   return F;
 }
 
+/// Adds memoization code to the delegate function. This includes the check to
+/// see if its value has been memoized, and the code to update the memoization
+/// cache once invoked.
 void ProgramSlice::addMemoizationCode(Function *F, ReturnInst *new_ret) {
   StructType *thunkStructType = getThunkStructType(true);
   IRBuilder<> builder(F->getContext());
@@ -960,13 +946,11 @@ void ProgramSlice::addMemoizationCode(Function *F, ReturnInst *new_ret) {
   builder.CreateStore(new_ret->getReturnValue(), memoedValueGEP);
 }
 
-/**
- * Outlines the given slice into a standalone Function, which
- * encapsulates the computation of the original value in
- * regards to which the slice was created. Adds memoization
- * code so that the function saves its evaluated value and
- * returns it on successive executions.
- */
+/// Outlines the given slice into a standalone Function, which
+/// encapsulates the computation of the original value in
+/// regards to which the slice was created. Adds memoization
+/// code so that the function saves its evaluated value and
+/// returns it on successive executions.
 Function *ProgramSlice::memoizedOutline() {
   StructType *thunkStructType = getThunkStructType(true);
   PointerType *thunkStructPtrType = thunkStructType->getPointerTo();

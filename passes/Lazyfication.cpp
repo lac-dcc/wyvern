@@ -62,11 +62,8 @@ static cl::opt<bool> WyvernLazyfication(
     cl::desc("Wyvern - Controls whether to enable lazyfication at all (used "
              "for comparison against O3 baseline)"));
 
-/**
- * Returns number of instructions in Function @param F. Is used to compute the
- * size of delegate functions generated through slicing.
- *
- */
+/// Returns number of instructions in Function @param F. Is used to compute the
+/// size of delegate functions generated through slicing.
 static unsigned int getNumberOfInsts(Function &F) {
   unsigned int size = 0;
   for (BasicBlock &BB : F) {
@@ -163,14 +160,11 @@ bool WyvernLazyficationPass::loadProfileInfo(Module &M, std::string path) {
   return true;
 }
 
-/**
- * When lazifying a callsite, there may be real arguments which originally had
- * associated parameters that change their optimization/implementation
- * semantics, for instance, noalias or byref/byval. Since we replace these
- * arguments by a thunk, these attributes are no longer valid. This function
- * removes them.
- *
- */
+/// When lazifying a callsite, there may be actual parameters which originally
+/// had associated parameters that change their optimization/implementation
+/// semantics, for instance, noalias or byref/byval. Since we replace these
+/// arguments by a thunk, these attributes are no longer valid. This function
+/// removes them.
 void removeAttributesFromThunkArgument(Value &V, unsigned int index) {
   AttributeMask toRemove;
 
@@ -190,21 +184,19 @@ void removeAttributesFromThunkArgument(Value &V, unsigned int index) {
   }
 }
 
-/**
- * At this point, Function @param F was subject to transformations to lazify
- * a function call, as either the caller or the callee.
- *
- * In regards to the caller, @param thunkValue is the thunk that is allocated
- * within it and then passed onto a lazyfied callee. However, there may be uses
- * of the lazyfied value @param valueToReplace other than the callsite. We
- * replace uses of this value by calls to the thunk, so that we maximize the
- * amount of potential dead code generation for further optimization.
- *
- * In regards to the callee, it was lazyfied and one of its arguments is now
- * @param thunkValue. However, uses of the argument within the function still
- * use it as a value rather than a thunk, so we replace these uses by proper
- * loading/invocation of the thunk.
- */
+/// At this point, Function @param F was subject to transformations to lazify
+/// a function call, as either the caller or the callee.
+///
+/// In regards to the caller, @param thunkValue is the thunk that is allocated
+/// within it and then passed onto a lazyfied callee. However, there may be uses
+/// of the lazyfied value @param valueToReplace other than the callsite. We
+/// replace uses of this value by calls to the thunk, so that we maximize the
+/// amount of potential dead code generation for further optimization.
+///
+/// In regards to the callee, it was lazyfied and one of its arguments is now
+/// @param thunkValue. However, uses of the argument within the function still
+/// use it as a value rather than a thunk, so we replace these uses by proper
+/// loading/invocation of the thunk.
 void updateThunkArgUses(Function *F, Value *thunkValue,
                         StructType *thunkStructType, Function *slicedFunction,
                         Value *valueToReplace = nullptr) {
@@ -273,11 +265,8 @@ void updateThunkArgUses(Function *F, Value *thunkValue,
   }
 }
 
-/**
- * Clones function @param Callee, replacing its formal parameter of index
- * @param index with thunk @param thunkArg.
- *
- */
+/// Clones function @param Callee, replacing its formal parameter of index
+/// @param index with thunk @param thunkArg.
 Function *cloneCalleeFunction(Function &Callee, int index,
                               Function &slicedFunction, Value *thunkArg,
                               StructType *thunkStructType, Module &M) {
@@ -321,6 +310,8 @@ Function *cloneCalleeFunction(Function &Callee, int index,
   return newCallee;
 }
 
+/// Attempts to lazify a given call site, in terms of its actual parameter with
+/// the given index.
 bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
                                             Module &M, AAResults *AA) {
   LLVM_DEBUG(dbgs() << "Analyzing callsite: " << CI << " for argument "
@@ -501,7 +492,8 @@ bool WyvernLazyficationPass::runOnModule(Module &M) {
 
       AAResults *AA =
           &getAnalysis<AAResultsWrapperPass>(*caller).getAAResults();
-      if (FLA.getLazyfiablePaths().count(std::make_pair(callee, argIdx)) > 0) {
+      if (FLA.getPromisingFunctionArgs().count(std::make_pair(callee, argIdx)) >
+          0) {
         changed = lazifyCallsite(*CI, argIdx, M, AA);
       }
     }

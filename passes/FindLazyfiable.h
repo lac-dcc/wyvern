@@ -11,7 +11,7 @@
 /// that are good candidates to be lazified. A good candidate for lazification
 /// is a call site that calls a "promising" function. A function is deemed
 /// promising if it contains a path from its entry node until an exit point
-/// that does not crosses any use of at least one of its formal parameters.
+/// that does not cross any use of at least one of its formal parameters.
 ///
 //===----------------------------------------------------------------------===//
 #include <map>
@@ -36,46 +36,37 @@ public:
   bool runOnModule(Module &);
   void getAnalysisUsage(AnalysisUsage &) const;
 
-  /// TODO: explain what the function does. In particular, why does it return
-  /// a set of functions, but is called "stats"?
-  const std::set<Function *> &getLazyFunctionStats() {
-    return _lazyFunctionsStats;
+  /// Returns the set of promising functions, regardless of which formal
+  /// paremeter happens to be lazifiable. Used for instrumentation.
+  const std::set<Function *> &getPromisingFunctions() {
+    return _promisingFunctions;
   }
 
-  /// TODO: explain what the function does. Explain why the return value is
-  /// a set of pairs.
-  const std::set<std::pair<Function *, int>> &getLazyPathsStats() {
-    return _lazyPathsStats;
+  /// Returns the set of (promising_function, promising_argument) pair. Each pair
+  /// represents a pair of a promising function, plus the index of its
+  /// formal parameter that is potentially unused.
+  const std::set<std::pair<Function *, int>> &getPromisingFunctionArgs() {
+    return _promisingFunctionArgs;
   }
 
-  /// TODO: explain what this function does. In particular, why the return is
-  /// like this: a map of pairs to integers? Your return types are definitely
-  /// a bit convoluted and hard to grok.
-  const std::map<std::pair<Function *, int>, int> &
-  getLazyfiableCallSiteStats() {
-    return _lazyfiableCallSitesStats;
-  }
-
-  /// TODO: explain what this function does.
-  const std::set<std::pair<Function *, int>> &getLazyfiablePaths() {
-    return _lazyfiablePaths;
-  }
-
-  /// TODO: explain what this function does.
+  /// Returns the set of (call, argument) lazifiable callsites. Each pair is a
+  /// call instruction, plus the index of its lazifiable actual parameter.
   const std::set<std::pair<CallInst *, int>> &getLazyfiableCallSites() {
     return _lazyfiableCallSites;
   }
 
 private:
-  /// TODO: I think we can understand quite a lot of what this pass does if
-  /// we can understand how you use the data structures. So, please, explain
-  /// them!
-  std::set<Function *> _lazyFunctionsStats;
-  std::set<std::pair<Function *, int>> _lazyPathsStats;
-  std::map<std::pair<Function *, int>, int> _lazyfiableCallSitesStats;
+  /// Stores the set of promising functions found in the program. Used for instrumentation.
+  std::set<Function *> _promisingFunctions;
 
-  std::set<std::pair<Function *, int>> _lazyfiablePaths;
+  /// Stores the pairs of (promising_function, promising_parameter) instances.
+  std::set<std::pair<Function *, int>> _promisingFunctionArgs;
+
+  /// Stores the pairs of (callsite, lazifiable_argument) instances.
   std::set<std::pair<CallInst *, int>> _lazyfiableCallSites;
+
+  /// Stores the number of (callsite, lazifiable_argument) occurrences, used
+  std::set<std::pair<Function *, int>> _lazyfiableCallSitesStats;
 
   /**
    * Traverses the module @param M, adding explicit uses of

@@ -1,8 +1,8 @@
 #define DEBUG_TYPE "WyvernInstrumentationPass"
 
 #include "llvm/Analysis/TargetLibraryInfo.h"
-#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 
 #include "FindLazyfiable.h"
@@ -27,23 +27,18 @@ static cl::opt<std::string> WyvernInstrumentOutputFile(
 
 #define DEBUG_TYPE "WyvernInstrumentationPass"
 
+/// When compiling with debug info, LLVM may complain that instructions we add
+/// do not have debug locations. This function adds a dummy debug location to
+/// the given instruction to silence these errors.
 static void updateDebugInfo(Instruction *I, Function *F) {
   if (F->getSubprogram()) {
     I->setDebugLoc(DILocation::get(F->getContext(), 0, 0, F->getSubprogram()));
   }
 }
 
-static bool shouldInstrumentInvokePath(BasicBlock *targetBB) {
-  if (CallInst *CI = dyn_cast<CallInst>(targetBB->getFirstInsertionPt())) {
-    if (CI->getCalledFunction() &&
-        CI->getCalledFunction()->getName() == "_wyinstr_end_call") {
-      return false;
-    }
-  }
-
-  return true;
-}
-
+/// Computes unique IDs for each instruction, as offsets from the beginning of
+/// the function. Used to identify each instruction uniquely
+/// pre-instrumentation, so we can track callsites by their IDs.
 static std::map<Instruction *, int64_t> computeInstrIDs(Function *F) {
   std::map<Instruction *, int64_t> instr_ids;
   int64_t instr_id = 0;
@@ -237,7 +232,7 @@ bool WyvernInstrumentationPass::runOnModule(Module &M) {
   std::shared_ptr<std::set<Function *>> promisingFunctions = nullptr;
   if (!WyvernInstrumentAll) {
     promisingFunctions =
-        std::make_shared<std::set<Function *>>(FLA.getLazyFunctionStats());
+        std::make_shared<std::set<Function *>>(FLA.getPromisingFunctions());
   }
 
   for (auto &F : M) {
