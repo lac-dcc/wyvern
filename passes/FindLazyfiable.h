@@ -6,7 +6,6 @@
 //
 //===----------------------------------------------------------------------===//
 /// \file
-/// TODO: check this comment:
 /// This file provides the interface for the analysis that finds calls sites
 /// that are good candidates to be lazified. A good candidate for lazification
 /// is a call site that calls a "promising" function. A function is deemed
@@ -42,8 +41,8 @@ public:
     return _promisingFunctions;
   }
 
-  /// Returns the set of (promising_function, promising_argument) pair. Each pair
-  /// represents a pair of a promising function, plus the index of its
+  /// Returns the set of (promising_function, promising_argument) pair. Each
+  /// pair is formed by a promising function, plus the index of its
   /// formal parameter that is potentially unused.
   const std::set<std::pair<Function *, int>> &getPromisingFunctionArgs() {
     return _promisingFunctionArgs;
@@ -56,7 +55,8 @@ public:
   }
 
 private:
-  /// Stores the set of promising functions found in the program. Used for instrumentation.
+  /// Stores the set of promising functions found in the program. Used for
+  /// instrumentation.
   std::set<Function *> _promisingFunctions;
 
   /// Stores the pairs of (promising_function, promising_parameter) instances.
