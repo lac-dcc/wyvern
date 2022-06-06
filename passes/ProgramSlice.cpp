@@ -14,6 +14,7 @@
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/PostDominators.h"
+#include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
@@ -248,7 +249,9 @@ static bool hasAddressTaken(const Instruction *AI, TypeSize AllocSize) {
 }
 
 ProgramSlice::ProgramSlice(Instruction &Initial, Function &F,
-                           CallInst &CallSite, AAResults *AA) {
+                           CallInst &CallSite, AAResults *AA,
+                           TargetLibraryInfo &TLI)
+    : _AA(AA), _TLI(TLI), _initial(&Initial), _parentFunction(&F) {
   assert(Initial.getParent()->getParent() == &F &&
          "Slicing instruction from different function!");
 
@@ -268,11 +271,8 @@ ProgramSlice::ProgramSlice(Instruction &Initial, Function &F,
 
   _instsInSlice = instsInSlice;
   _depArgs = depArgs;
-  _initial = &Initial;
-  _parentFunction = &F;
   _BBsInSlice = BBsInSlice;
   _CallSite = &CallSite;
-  _AA = AA;
 
   // We need to pre-compute struct types, because if we build it everytime
   // it's needed, LLVM creates multiple types with the same structure but
@@ -624,6 +624,24 @@ bool ProgramSlice::canOutline() {
       return false;
     }
 
+    if (const CallBase *CB = dyn_cast<CallBase>(I)) {
+      if (!CB->getCalledFunction()) {
+        errs() << "Cannot outline slice because instruction calls unknown "
+                  "function: "
+               << *CB << "\n";
+        return false;
+      }
+
+      LibFunc builtin;
+      if (CB->getCalledFunction()->isDeclaration() &&
+          !_TLI.getLibFunc(*CB, builtin)) {
+        errs() << "Cannot outline slice because instruction calls non-builtin "
+                  "function with no body: "
+               << *CB << "\n";
+        return false;
+      }
+    }
+
     // For instructions that may read or write to memory, we need some special
     // care to avoid load/store reordering and/or side effects.
     if (I->mayReadOrWriteMemory()) {
@@ -657,16 +675,6 @@ bool ProgramSlice::canOutline() {
     else if (!I->willReturn()) {
       errs() << "Cannot outline because inst may not return: " << *I << "\n";
       return false;
-    }
-
-    if (const AllocaInst *AI = dyn_cast<AllocaInst>(I)) {
-      const Module *M = AI->getParent()->getParent()->getParent();
-      if (hasAddressTaken(AI, M->getDataLayout().getTypeAllocSize(
-                                  AI->getAllocatedType()))) {
-        errs() << "Cannot outline slice because alloca has address taken:"
-               << *AI << "\n";
-        return false;
-      }
     }
 
     for (const Value *arg : _CallSite->args()) {

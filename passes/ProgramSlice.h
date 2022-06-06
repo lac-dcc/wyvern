@@ -14,7 +14,7 @@ public:
   /// Creates a backward slice of function F in terms of slice criterion I,
   /// which is passed as a parameter in call CallSite. Optionally, receives the
   /// result of an Alias Analysis in AA to perform memory safety analysis.
-  ProgramSlice(Instruction &I, Function &F, CallInst &CallSite, AAResults *AA);
+  ProgramSlice(Instruction &I, Function &F, CallInst &CallSite, AAResults *AA, TargetLibraryInfo &TLI);
 
   /// Returns whether the slice can be safely outlined into a delegate function.
   bool canOutline();
@@ -51,7 +51,6 @@ private:
   void computeAttractorBlocks();
   void addDomBranches(DomTreeNode *cur, DomTreeNode *parent,
                       std::set<DomTreeNode *> &visited);
-  SmallVector<Type *> getInputArgTypes();
   StructType *computeStructType(bool memo);
 
   /// pointer to the Instruction used as slice criterion
@@ -100,5 +99,9 @@ private:
 
   /// Alias analysis used to evaluate slice safety
   AAResults *_AA;
+
+  /// TargetLibraryInfo for the function, used to detect standard library
+  /// functions
+  TargetLibraryInfo &_TLI;
 };
 } // namespace llvm

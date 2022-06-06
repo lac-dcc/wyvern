@@ -324,7 +324,8 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
   }
 
   Function *caller = CI.getParent()->getParent();
-  ProgramSlice slice = ProgramSlice(*lazyfiableArg, *caller, CI, AA);
+  TargetLibraryInfo &TLI = getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(*caller);
+  ProgramSlice slice = ProgramSlice(*lazyfiableArg, *caller, CI, AA, TLI);
   if (!slice.canOutline()) {
     LLVM_DEBUG(dbgs() << "Cannot lazify argument. Slice is not outlineable!\n");
     return false;
@@ -517,6 +518,7 @@ void WyvernLazyficationPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<GlobalsAAWrapperPass>();
   AU.addRequired<CFLSteensAAWrapperPass>();
   AU.addRequired<AAResultsWrapperPass>();
+  AU.addRequired<TargetLibraryInfoWrapperPass>();
 }
 
 static llvm::RegisterStandardPasses RegisterWyvernLazification(
