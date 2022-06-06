@@ -6,6 +6,40 @@ This transformation involves a static analysis to identify function calls that a
 
 We have implemented lazification onto [LLVM](https://llvm.org/) 14.0, and have applied it onto hundreds of C/C++ programs from the LLVM test-suite and from [SPEC CPU2017](https://www.spec.org/cpu2017/). During this evaluation, we could observe statistically significant speedups over [clang](https://clang.llvm.org/) -O3 on some large programs, including a speedup of 11.1% on Prolang's `Bison` and a speedup of 4.6% on SPEC CPU2017's `perlbench`, which has more than 1.7 million LLVM instructions once compiled with clang -O3.
 
+## Building
+
+Lazification has been implemented as an LLVM pass. To build the pass, assume that you have the LLVM libraries installed at `~/llvm-project/build/lib/cmake/llvm`. In this case, do:
+
+    cd wyvern # The directory where you've unpacked this repo.
+    mkdir build
+    cd build
+    cmake ../ -DLLVM_DIR="~/llvm-project/build/lib/cmake/llvm"
+    make -j2
+    
+Once you are done with `make`, you should have a folder called `passes` in your `build` directory. Check that you now have a library `libWyvern.so` there.
+
+## Running
+
+Once you compile our LLVM pass, you can load it in the LLVM [optimizer](https://llvm.org/docs/CommandGuide/opt.html), as follows:
+
+    cd wyvern/test # Examples of lazifiable code.
+    # Generate an optimizable bytecode:
+    #
+    clang -S -c -emit-llvm -Xclang -disable-O0-optnone test_performance.c  -o test.ll
+    # Enable a few supporting LLVM passes:
+    #
+    LLVM_SUPPORT="-mem2reg -mergereturn -function-attrs -loop-simplify -lcssa"
+    WYVERN_LIB="~/wyvern/build/passes/libWyvern.so"
+    opt -load $WYVERN_LIB -S $LLVM_SUPPORT -enable-new-pm=0 -lazify-callsites \
+      -stats test.ll -o test_lazyfied.ll
+      
+The above commands generate two files in your working folder: `test.ll` and `test_lazyfied.ll`. The first file is the original program, the second, the lazified code that we generate. To test them both, do:
+
+    clang test.ll -O3 -o test.exe
+    clang test_lazyfied.ll -O3 -o test_lazified.exe
+    time ./test.exe 1000000000
+    time ./test_lazified.exe 1000000000
+
 ## Lazification in One Example
 
 Some programming languages let developers specify function arguments that could be evaluated lazily. The optimization implemented in this repository moves the task of recognizing profitable lazification opportunities to the compiler. In other words, our optimization:
