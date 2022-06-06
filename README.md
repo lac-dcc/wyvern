@@ -20,14 +20,12 @@ Once you are done with `make`, you should have a folder called `passes` in your 
 
 ## Running
 
-Once you compile our LLVM pass, you can load it in the LLVM [optimizer](https://llvm.org/docs/CommandGuide/opt.html), as follows:
+Once you compile our LLVM pass, you can load it in the LLVM [optimizer](https://llvm.org/docs/CommandGuide/opt.html). This repository contains a few examples of code that are likely to benefit from lazification in the `test` folder. For instance, check out the file `test_performance.c`, which contains the code that we shall use as an example further down. You can translate this file into LLVM bytecodes as follows:
 
-    cd wyvern/test # Examples of lazifiable code.
-    # Generate an optimizable bytecode:
-    #
     clang -S -c -emit-llvm -Xclang -disable-O0-optnone test_performance.c  -o test.ll
-    # Enable a few supporting LLVM passes:
-    #
+
+Then, once you obtain a file written in LLVM assembly (`test.ll`), you can lazify it using the optimizer. Notice that lazification requires some previous application of a few LLVM passes (`LLVM_SUPPORT`):
+
     LLVM_SUPPORT="-mem2reg -mergereturn -function-attrs -loop-simplify -lcssa"
     WYVERN_LIB="~/wyvern/build/passes/libWyvern.so"
     opt -load $WYVERN_LIB -S $LLVM_SUPPORT -enable-new-pm=0 -lazify-callsites \
