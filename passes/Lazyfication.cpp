@@ -263,11 +263,15 @@ Function *cloneCalleeFunction(Function &Callee, int index,
   }
   argTypes[index] = thunkArg->getType();
 
+  // generate a random number to use as suffix for clone, to avoid naming
+  // conflicts
+  // NOTE: we cannot use a simple counter that gets incremented on every
+  // clone here, because when optimizing per translation unit, the same callee
+  // may be cloned across different translation units
   std::random_device rd;
   std::mt19937 mt(rd());
   std::uniform_int_distribution<int64_t> dist(1, 1000000000);
   uint64_t random_num = dist(mt);
-
   FunctionType *FT = FunctionType::get(Callee.getReturnType(), argTypes, false);
   std::string functionName = "_wyvern_calleeclone_" + Callee.getName().str() +
                              "_" + std::to_string(index) +

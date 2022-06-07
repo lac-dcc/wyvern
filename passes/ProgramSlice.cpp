@@ -782,11 +782,15 @@ Function *ProgramSlice::outline() {
   FunctionType *delegateFunctionType =
       FunctionType::get(_initial->getType(), {thunkStructPtrType}, false);
 
+  // generate a random number to use as suffix for delegate function, to avoid
+  // naming conflicts
+  // NOTE: we cannot use a simple counter that gets incremented
+  // on every slice here, because when optimizing per translation unit, the same
+  // function may be sliced across different translation units
   std::random_device rd;
   std::mt19937 mt(rd());
   std::uniform_int_distribution<int64_t> dist(1, 1000000000);
   uint64_t random_num = dist(mt);
-
   std::string functionName =
       "_wyvern_slice_" + _initial->getParent()->getParent()->getName().str() +
       "_" + _initial->getName().str() + std::to_string(random_num);
