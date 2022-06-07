@@ -202,15 +202,14 @@ void updateThunkArgUses(Function *F, Value *thunkValue,
                         Value *valueToReplace = nullptr) {
   // We could be adding thunk uses in either the caller or callee
   bool isCallee = (valueToReplace == nullptr);
-  std::map<User *, CallInst *> userCalls;
-  std::set<Use *> usesToChange;
+  std::map<Use *, CallInst *> useCalls;
 
   IRBuilder<> builder(F->getContext());
 
   Value *toReplace = isCallee ? thunkValue : valueToReplace;
   for (auto &Use : toReplace->uses()) {
     Instruction *UserI = dyn_cast<Instruction>(Use.getUser());
-    if (UserI && !userCalls.count(UserI)) {
+    if (UserI) {
       // If the use is a PHINode, the use happens at the edge, so we cannot
       // insert the thunk load/call at the PHI's block. Instead, we must insert
       // them at the end of the block which flows into the PHI node
@@ -223,7 +222,6 @@ void updateThunkArgUses(Function *F, Value *thunkValue,
       }
 
       Value *thunkCallTarget = slicedFunction;
-
       // When optimizing the callee, load the function pointer from the thunk
       if (isCallee) {
         Value *thunkFPtrGEP = builder.CreateStructGEP(
@@ -240,28 +238,17 @@ void updateThunkArgUses(Function *F, Value *thunkValue,
           builder.CreateCall(slicedFunction->getFunctionType(), thunkCallTarget,
                              {thunkValue}, "_wyvern_thunkcall");
 
-      if (PHINode *PN = dyn_cast<PHINode>(UserI)) {
-        PN->setIncomingValueForBlock(PN->getIncomingBlock(Use), thunkCall);
-      }
-
       // Replacing uses/users immediately can break use-def chains. Instead,
-      // keep track of all users to be updated.
-      userCalls[UserI] = thunkCall;
-    }
-  }
-
-  for (auto &Use : toReplace->uses()) {
-    Instruction *UserI = dyn_cast<Instruction>(Use.getUser());
-    // Replacing uses/users immediately can break use-def chains. Instead, keep
-    // track of all uses to be updated.
-    if (UserI && userCalls.count(UserI)) {
-      usesToChange.insert(&Use);
+      // keep track of all uses to be updated.
+      useCalls[&Use] = thunkCall;
     }
   }
 
   // Update uses
-  for (auto *Use : usesToChange) {
-    Use->set(userCalls[Use->getUser()]);
+  for (auto &entry : useCalls) {
+    Use *use = entry.first;
+    CallInst *CI = entry.second;
+    use->set(CI);
   }
 }
 
@@ -315,7 +302,7 @@ Function *cloneCalleeFunction(Function &Callee, int index,
 bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
                                             Module &M, AAResults *AA) {
   LLVM_DEBUG(dbgs() << "Analyzing callsite: " << CI << " for argument "
-                    << CI.getOperand(index) << "\n");
+                    << *CI.getOperand(index) << "\n");
 
   Instruction *lazyfiableArg;
   if (!(lazyfiableArg = dyn_cast<Instruction>(CI.getArgOperand(index)))) {
@@ -324,7 +311,8 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
   }
 
   Function *caller = CI.getParent()->getParent();
-  TargetLibraryInfo &TLI = getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(*caller);
+  TargetLibraryInfo &TLI =
+      getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(*caller);
   ProgramSlice slice = ProgramSlice(*lazyfiableArg, *caller, CI, AA, TLI);
   if (!slice.canOutline()) {
     LLVM_DEBUG(dbgs() << "Cannot lazify argument. Slice is not outlineable!\n");
