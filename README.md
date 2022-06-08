@@ -10,11 +10,13 @@ We have implemented lazification onto [LLVM](https://llvm.org/) 14.0, and have a
 
 Lazification has been implemented as an LLVM pass. To build the pass, assume that you have the LLVM libraries installed at `~/llvm-project/build/lib/cmake/llvm`. In this case, do:
 
-    cd wyvern # The directory where you've unpacked this repo.
-    mkdir build
-    cd build
-    cmake ../ -DLLVM_DIR="~/llvm-project/build/lib/cmake/llvm"
-    make -j2
+```shell
+cd wyvern # The directory where you've unpacked this repo.
+mkdir build
+cd build
+cmake ../ -DLLVM_DIR="~/llvm-project/build/lib/cmake/llvm"
+make -j2
+```
     
 Once you are done with `make`, you should have a folder called `passes` in your `build` directory. Check that you now have a library `libWyvern.so` there.
 
@@ -22,21 +24,42 @@ Once you are done with `make`, you should have a folder called `passes` in your 
 
 Once you compile our LLVM pass, you can load it in the LLVM [optimizer](https://llvm.org/docs/CommandGuide/opt.html). This repository contains a few examples of code that are likely to benefit from lazification in the `test` folder. For instance, check out the file `test_performance.c`, which contains the code that we shall use as an example further down. You can translate this file into LLVM bytecodes as follows:
 
-    clang -S -c -emit-llvm -Xclang -disable-O0-optnone test_performance.c  -o test.ll
+```shell
+clang -S -c -emit-llvm -Xclang -disable-O0-optnone test_performance.c  -o test.ll
+```
 
-Then, once you obtain a file written in LLVM assembly (`test.ll`), you can lazify it using the optimizer. Notice that lazification requires some previous application of a few LLVM passes (`LLVM_SUPPORT`):
+Then, once you obtain a file written in LLVM assembly (`test.ll`), you can lazify it using the optimizer. Notice that lazification requires some previous application of a few LLVM passes (`LLVM_SUPPORT`). It also requires a pass to run post-optimization (`LLVM_POST_LAZY`):
 
-    LLVM_SUPPORT="-mem2reg -mergereturn -function-attrs -loop-simplify -lcssa"
-    WYVERN_LIB="~/wyvern/build/passes/libWyvern.so"
-    opt -load $WYVERN_LIB -S $LLVM_SUPPORT -enable-new-pm=0 -lazify-callsites \
-      -stats test.ll -o test_lazyfied.ll
+```shell
+LLVM_SUPPORT="-mem2reg -mergereturn -function-attrs -loop-simplify -lcssa"
+LLVM_POST_LAZY="-instcombine"
+WYVERN_LIB="~/wyvern/build/passes/libWyvern.so"
+opt -load $WYVERN_LIB -S $LLVM_SUPPORT -enable-new-pm=0 -lazify-callsites \
+  $LLVM_POST_LAZY -stats test.ll -o test_lazyfied.ll
+```
       
 The above commands generate two files in your working folder: `test.ll` and `test_lazyfied.ll`. The first file is the original program, the second, the lazified code that we generate. To test them both, do:
 
-    clang test.ll -O3 -o test.exe
-    clang test_lazyfied.ll -O3 -o test_lazified.exe
-    time ./test.exe 1000000000
-    time ./test_lazified.exe 1000000000
+```shell
+clang test.ll -O3 -o test.exe
+clang test_lazyfied.ll -O3 -o test_lazified.exe
+time ./test.exe 1000000000
+time ./test_lazified.exe 1000000000
+```
+
+## Running with LTO
+
+The above section shows how to run Lazification using the LLVM infrastructure in a two-step process: compile to LLVM bitcode, then optimize the bitcode manually. While this workflow is usually fine for small programs, for large applications it can be impractical to perform this two-step compilation of every file. Additionally, in large projects compiling each translation unit individually can miss lazification opportunities, since caller and callee functions could be located in different translation units, and lazification requires both functions' bodies to be available simultaneously. Thus, it may be favorable to run Lazification using [Link Time Optimization](https://llvm.org/docs/LinkTimeOptimization.html) (LTO).
+
+To run Lazification with LTO, you will need to have the [LLVM linker](https://lld.llvm.org/) (LLD) installed in your environment. Then, Lazification can be invoked straight from the `clang` compiler driver:
+
+```shell
+clang -flegacy-pass-manager -flto -Xclang -disable-O0-optnone -fuse-ld=lld \
+ -Wl,-mllvm=-load=$WYVERN_LIB test_performance -O3 \
+ -Wl,-mllvm=-stats -o test.exe
+```
+
+This will generate a lazified executable binary straight from input source file. Note that when in LTO mode, the pass is automatically inserted into LLVM's optimization pipeline, so there is no need to provide the additional passes (`LLVM_SUPPORT` and `LLVM_POST_LAZY`) to be run manually.
 
 ## Lazification in One Example
 
