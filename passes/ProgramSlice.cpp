@@ -488,22 +488,6 @@ bool ProgramSlice::canOutline() {
   LoopInfo LI = LoopInfo(DT);
   AliasSetTracker AST(*_AA);
 
-  // Collect all memory locations referenced by loads/geps in the slice
-  SmallVector<const MemoryLocation *, 32> memLocs;
-  for (const Instruction *I : _instsInSlice) {
-    if (const LoadInst *LI = dyn_cast<LoadInst>(I)) {
-      llvm::Optional<MemoryLocation> ML = MemoryLocation::getOrNone(LI);
-      if (ML.hasValue()) {
-        memLocs.push_back(&ML.getValue());
-      }
-    } else if (const GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(I)) {
-      llvm::Optional<MemoryLocation> ML = MemoryLocation::getOrNone(GEP);
-      if (ML.hasValue()) {
-        memLocs.push_back(&ML.getValue());
-      }
-    }
-  }
-
   // Build alias sets for stores and function calls in the function.
   // Note that we only care about memory locations that are part of the
   // slice, or which are loaded by loads in the slice.
@@ -512,18 +496,17 @@ bool ProgramSlice::canOutline() {
       if (StoreInst *SI = dyn_cast<StoreInst>(&I)) {
         AST.add(SI);
       } else if (CallBase *CB = dyn_cast<CallBase>(&I)) {
-        for (auto *ML : memLocs) {
-          if (_AA->getModRefInfo(CB, *ML) == ModRefInfo::Mod) {
-            AST.add(CB);
-          }
+        if (CB == _CallSite) {
+          continue;
         }
+        AST.add(CB);
       }
     }
   }
 
   for (const Instruction *I : _instsInSlice) {
     if (I->mayThrow()) {
-      errs() << "Cannot outline because inst may throw: " << *I << "\n";
+      errs() << "Cannot outline slice because inst may throw: " << *I << "\n";
       return false;
     }
 
@@ -581,6 +564,9 @@ bool ProgramSlice::canOutline() {
     }
 
     for (const Value *arg : _CallSite->args()) {
+      if (arg == _initial) {
+        continue;
+      }
       if (arg->getType()->isPointerTy() && I->getType()->isPointerTy()) {
         if (_AA->alias(arg, I) != AliasResult::NoAlias) {
           errs() << "Cannot outline slice because pointer used in slice is "
