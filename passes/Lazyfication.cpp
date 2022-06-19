@@ -513,8 +513,20 @@ void WyvernLazyficationPass::getAnalysisUsage(AnalysisUsage &AU) const {
   AU.addRequired<TargetLibraryInfoWrapperPass>();
 }
 
-static llvm::RegisterStandardPasses RegisterWyvernLazification(
+static llvm::RegisterStandardPasses RegisterWyvernLazificationLTO(
     llvm::PassManagerBuilder::EP_FullLinkTimeOptimizationEarly,
+    [](const llvm::PassManagerBuilder &Builder,
+       llvm::legacy::PassManagerBase &PM) {
+      PM.add(new WyvernLazyficationPass());
+      // Since we explicitly run LCSSA during our analyses, there may be
+      // leftover invalid PHINodes created by it in the program. We must then
+      // run -inst-combine explicitly to remove them (as LLVM itself does behind
+      // the scenes).
+      PM.add(llvm::createInstructionCombiningPass());
+    });
+
+static llvm::RegisterStandardPasses RegisterWyvernLazification(
+    llvm::PassManagerBuilder::EP_ModuleOptimizerEarly,
     [](const llvm::PassManagerBuilder &Builder,
        llvm::legacy::PassManagerBase &PM) {
       PM.add(new WyvernLazyficationPass());
