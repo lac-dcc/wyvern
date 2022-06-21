@@ -22,6 +22,7 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/Debug.h"
@@ -489,9 +490,7 @@ bool ProgramSlice::canOutline() {
   LoopInfo LI = LoopInfo(DT);
   AliasSetTracker AST(*_AA);
 
-  // Build alias sets for stores and function calls in the function.
-  // Note that we only care about memory locations that are part of the
-  // slice, or which are loaded by loads in the slice.
+  // Build alias sets for memory instructions in the function.
   for (BasicBlock &BB : *_parentFunction) {
     for (Instruction &I : BB) {
       if (StoreInst *SI = dyn_cast<StoreInst>(&I)) {
@@ -818,11 +817,19 @@ Function *ProgramSlice::outline() {
   std::uniform_int_distribution<int64_t> dist(1, 1000000000);
   uint64_t random_num = dist(mt);
   std::string functionName =
-      "_wyvern_slice_" + _initial->getParent()->getParent()->getName().str() +
-      "_" + _initial->getName().str() + std::to_string(random_num);
-  Function *F = Function::Create(
-      delegateFunctionType, Function::ExternalLinkage, functionName,
-      _initial->getParent()->getParent()->getParent());
+      "_wyvern_slice_" + _parentFunction->getName().str() + "_" +
+      _initial->getName().str() + std::to_string(random_num);
+  Function *F =
+      Function::Create(delegateFunctionType, Function::ExternalLinkage,
+                       functionName, _parentFunction->getParent());
+
+  // Let LLVM know that the delegate function is pure, so it can further
+  // optimize calls to it
+  AttrBuilder builder(_parentFunction->getContext());
+  builder.addAttribute(Attribute::ReadOnly);
+  builder.addAttribute(Attribute::NoUnwind);
+  builder.addAttribute(Attribute::WillReturn);
+  F->addFnAttrs(builder);
 
   F->arg_begin()->setName("_wyvern_thunkptr");
 
@@ -904,12 +911,19 @@ Function *ProgramSlice::memoizedOutline() {
   uint64_t random_num = dist(mt);
 
   std::string functionName =
-      "_wyvern_slice_memo_" +
-      _initial->getParent()->getParent()->getName().str() + "_" +
+      "_wyvern_slice_memo_" + _parentFunction->getName().str() + "_" +
       _initial->getName().str() + std::to_string(random_num);
-  Function *F = Function::Create(
-      delegateFunctionType, Function::ExternalLinkage, functionName,
-      _initial->getParent()->getParent()->getParent());
+  Function *F =
+      Function::Create(delegateFunctionType, Function::ExternalLinkage,
+                       functionName, _parentFunction->getParent());
+
+  // Let LLVM know that the delegate function is pure, so it can further
+  // optimize calls to it
+  AttrBuilder builder(_parentFunction->getContext());
+  builder.addAttribute(Attribute::ReadOnly);
+  builder.addAttribute(Attribute::NoUnwind);
+  builder.addAttribute(Attribute::WillReturn);
+  F->addFnAttrs(builder);
 
   F->arg_begin()->setName("_wyvern_thunkptr");
 
