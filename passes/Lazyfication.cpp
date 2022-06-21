@@ -336,6 +336,13 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
     return false;
   }
 
+  Argument *callee_arg = callee->getArg(index);
+  if (callee_arg->getNumUses() == 0) {
+    LLVM_DEBUG(dbgs() << "Will not lazify argument because it has no uses in "
+                         "callee function! Possibly @this pointer?\n");
+    return false;
+  }
+
   ++NumCallsitesLazified;
   if (lazifiedFunctions.emplace(std::make_pair(caller, lazyfiableArg)).second) {
     ++NumFunctionsLazified;
