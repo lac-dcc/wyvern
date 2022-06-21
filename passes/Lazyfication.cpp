@@ -353,6 +353,18 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
                     << "\n");
 
   IRBuilder<> builder(M.getContext());
+  builder.SetInsertPoint(&*(caller->getEntryBlock().getFirstInsertionPt()));
+
+  Function *thunkFunction, *newCallee;
+  StructType *thunkStructType;
+
+  thunkFunction =
+      WyvernLazyficationMemoization ? slice.memoizedOutline() : slice.outline();
+  thunkStructType = slice.getThunkStructType(WyvernLazyficationMemoization);
+
+  AllocaInst *thunkAlloca =
+      builder.CreateAlloca(thunkStructType, nullptr, "_wyvern_thunk_alloca");
+
   if (isa<PHINode>(lazyfiableArg)) {
     builder.SetInsertPoint(
         &*(lazyfiableArg->getParent()->getFirstInsertionPt()));
@@ -360,16 +372,8 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
     builder.SetInsertPoint(lazyfiableArg);
   }
 
-  Function *thunkFunction, *newCallee;
-  AllocaInst *thunkAlloca;
-  StructType *thunkStructType;
-
-  thunkFunction =
-      WyvernLazyficationMemoization ? slice.memoizedOutline() : slice.outline();
-  thunkStructType = slice.getThunkStructType(WyvernLazyficationMemoization);
-
   if (WyvernLazyficationMemoization) {
-    // allocate thunk, initialize it with:
+    // initialize thunk with:
     // struct thunk {
     //   fptr = thunkFunction
     //   memoed_value = undef
@@ -378,8 +382,6 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
     //   arg1 = y
     //   ...
     // }
-    thunkAlloca =
-        builder.CreateAlloca(thunkStructType, nullptr, "_wyvern_thunk_alloca");
     Value *thunkFPtrGEP = builder.CreateStructGEP(thunkStructType, thunkAlloca,
                                                   0, "_wyvern_thunk_fptr_gep");
     builder.CreateStore(thunkFunction, thunkFPtrGEP);
@@ -396,15 +398,13 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
       ++i;
     }
   } else {
-    // allocate thunk, initialize it with:
+    // initialize thunk with:
     // struct thunk {
     //   fptr = thunkFunction
     //   arg0 = x
     //   arg1 = y
     //   ...
     // }
-    thunkAlloca =
-        builder.CreateAlloca(thunkStructType, nullptr, "_wyvern_thunk_alloca");
     Value *thunkFPtrGEP = builder.CreateStructGEP(thunkStructType, thunkAlloca,
                                                   0, "_wyvern_thunk_fptr_gep");
     builder.CreateStore(thunkFunction, thunkFPtrGEP);
