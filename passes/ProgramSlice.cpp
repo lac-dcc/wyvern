@@ -15,6 +15,7 @@
 #include "llvm/Analysis/MemoryLocation.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/Function.h"
@@ -500,6 +501,45 @@ bool ProgramSlice::canOutline() {
           continue;
         }
         AST.add(CB);
+      } else if (LoadInst *LI = dyn_cast<LoadInst>(&I)) {
+        AST.add(LI);
+      } else if (AnyMemSetInst *MSI = dyn_cast<AnyMemSetInst>(&I)) {
+        AST.add(MSI);
+      } else if (AnyMemTransferInst *MTI = dyn_cast<AnyMemTransferInst>(&I)) {
+        AST.add(MTI);
+      }
+    }
+  }
+
+  // LLVM does not provide alias/memory dependence information for allocas.
+  // Thus, we track allocas that belong in the slice explicitly, so we can then
+  // check if their memory is clobbered (changed) at any point in the slice
+  // itself or at some other point in the parent function.
+  SmallPtrSet<const Value *, 32> allocasInSlice;
+  for (const Instruction *I : _instsInSlice) {
+    if (const AllocaInst *AI = dyn_cast<AllocaInst>(I)) {
+      allocasInSlice.insert(AI);
+    }
+  }
+
+  for (BasicBlock &BB : *_parentFunction) {
+    for (Instruction &I : BB) {
+      if (StoreInst *SI = dyn_cast<StoreInst>(&I)) {
+        Value *underlying = getUnderlyingObject(SI->getPointerOperand());
+        if (allocasInSlice.contains(underlying)) {
+          errs() << "Cannot outline slice because alloca is clobbered: "
+                 << *underlying << "\n";
+          return false;
+        }
+      } else if (LoadInst *LI = dyn_cast<LoadInst>(&I)) {
+        if (AST.getAliasSetFor(MemoryLocation::get(LI)).isMod()) {
+          Value *underlying = getUnderlyingObject(LI->getPointerOperand());
+          if (allocasInSlice.contains(underlying)) {
+            errs() << "Cannot outline slice because alloca is clobbered: "
+                   << *underlying << "\n";
+            return false;
+          }
+        }
       }
     }
   }
