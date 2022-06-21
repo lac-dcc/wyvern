@@ -26,6 +26,9 @@ int maybe_use_arg(int data) {
 	while(counter--) {
 		new_data--;
 	}
+	if (new_data == 0) {
+		return new_data + data;
+	}
 	return new_data;
 }
 
