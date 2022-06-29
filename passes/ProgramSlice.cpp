@@ -32,9 +32,6 @@
 
 #define DEBUG_TYPE "ProgramSlicing"
 
-STATISTIC(InvalidSlices,
-          "Slices which contain branches with no post dominator.");
-
 using namespace llvm;
 
 /// Returns the block whose predicate should control the phi-functions in BB
