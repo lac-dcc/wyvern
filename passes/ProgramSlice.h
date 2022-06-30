@@ -14,7 +14,8 @@ public:
   /// Creates a backward slice of function F in terms of slice criterion I,
   /// which is passed as a parameter in call CallSite. Optionally, receives the
   /// result of an Alias Analysis in AA to perform memory safety analysis.
-  ProgramSlice(Instruction &I, Function &F, CallInst &CallSite, AAResults *AA, TargetLibraryInfo &TLI);
+  ProgramSlice(Instruction &I, Function &F, CallInst &CallSite, AAResults *AA,
+               TargetLibraryInfo &TLI, bool thunkDebugging);
 
   /// Returns whether the slice can be safely outlined into a delegate function.
   bool canOutline();
@@ -103,5 +104,7 @@ private:
   /// TargetLibraryInfo for the function, used to detect standard library
   /// functions
   TargetLibraryInfo &_TLI;
+
+  bool _thunkDebugging;
 };
 } // namespace llvm

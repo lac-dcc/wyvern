@@ -3,6 +3,7 @@ add_library(Wyvern MODULE
 	Instrumentation.cpp
 	ProgramSlice.cpp
 	Lazyfication.cpp
+	DebugUtils.cpp
 )
 
 target_compile_features(Wyvern PRIVATE cxx_std_17)

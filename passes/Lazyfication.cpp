@@ -14,6 +14,7 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/Local.h"
 
+#include "DebugUtils.h"
 #include "FindLazyfiable.h"
 #include "Lazyfication.h"
 #include "ProgramSlice.h"
@@ -62,6 +63,12 @@ static cl::opt<bool> WyvernLazyfication(
     cl::desc("Wyvern - Controls whether to enable lazyfication at all (used "
              "for comparison against O3 baseline)"));
 
+static cl::opt<bool> WyvernThunkDebugging(
+    "wylazy-debug", cl::init(false),
+    cl::desc("Wyvern - Controls whether to generate debugging code for thunks. "
+             "This will print data on thunk data structures when they're "
+             "initialized and evaluated."));
+
 /// Returns number of instructions in Function @param F. Is used to compute the
 /// size of delegate functions generated through slicing.
 static unsigned int getNumberOfInsts(Function &F) {
@@ -72,6 +79,159 @@ static unsigned int getNumberOfInsts(Function &F) {
     }
   }
   return size;
+}
+
+/// When lazifying a callsite, there may be actual parameters which originally
+/// had associated parameters that change their optimization/implementation
+/// semantics, for instance, noalias or byref/byval. Since we replace these
+/// arguments by a thunk, these attributes are no longer valid. This function
+/// removes them.
+static void removeAttributesFromThunkArgument(Value &V, unsigned int index) {
+  AttributeMask toRemove;
+
+  toRemove.addAttribute(Attribute::SExt);
+  toRemove.addAttribute(Attribute::ZExt);
+  toRemove.addAttribute(Attribute::NoAlias);
+  toRemove.addAttribute(Attribute::ByRef);
+  toRemove.addAttribute(Attribute::NoCapture);
+  toRemove.addAttribute(Attribute::ByVal);
+  toRemove.addAttribute(Attribute::ReadOnly);
+  toRemove.addAttribute(Attribute::WriteOnly);
+
+  if (CallInst *CI = dyn_cast<CallInst>(&V)) {
+    CI->removeParamAttrs(index, toRemove);
+  } else if (Function *F = dyn_cast<Function>(&V)) {
+    F->removeParamAttrs(index, toRemove);
+  }
+}
+
+/// At this point, Function @param F was subject to transformations to lazify
+/// a function call, as either the caller or the callee.
+///
+/// In regards to the caller, @param thunkValue is the thunk that is allocated
+/// within it and then passed onto a lazyfied callee. However, there may be uses
+/// of the lazyfied value @param valueToReplace other than the callsite. We
+/// replace uses of this value by calls to the thunk, so that we maximize the
+/// amount of potential dead code generation for further optimization.
+///
+/// In regards to the callee, it was lazyfied and one of its arguments is now
+/// @param thunkValue. However, uses of the argument within the function still
+/// use it as a value rather than a thunk, so we replace these uses by proper
+/// loading/invocation of the thunk.
+static void updateThunkArgUses(Function *F, Value *thunkValue,
+                               StructType *thunkStructType,
+                               Function *slicedFunction,
+                               Value *valueToReplace = nullptr) {
+  // We could be adding thunk uses in either the caller or callee
+  bool isCallee = (valueToReplace == nullptr);
+  std::map<Use *, CallInst *> useCalls;
+
+  IRBuilder<> builder(F->getContext());
+
+  Value *toReplace = isCallee ? thunkValue : valueToReplace;
+  for (auto &Use : toReplace->uses()) {
+    Instruction *UserI = dyn_cast<Instruction>(Use.getUser());
+    if (UserI) {
+      // If the use is a PHINode, the use happens at the edge, so we cannot
+      // insert the thunk load/call at the PHI's block. Instead, we must insert
+      // them at the end of the block which flows into the PHI node
+      BasicBlock *origin = nullptr;
+      if (PHINode *PN = dyn_cast<PHINode>(UserI)) {
+        origin = PN->getIncomingBlock(Use);
+        builder.SetInsertPoint(origin->getTerminator());
+      } else {
+        builder.SetInsertPoint(UserI);
+      }
+
+      Value *thunkCallTarget = slicedFunction;
+      // When optimizing the callee, load the function pointer from the thunk
+      if (isCallee) {
+        Value *thunkFPtrGEP = builder.CreateStructGEP(
+            thunkStructType, thunkValue, 0, "_wyvern_thunk_fptr_addr");
+        Value *thunkFPtrLoad =
+            builder.CreateLoad(thunkStructType->getStructElementType(0),
+                               thunkFPtrGEP, "_wyvern_thunkfptr");
+        thunkCallTarget = thunkFPtrLoad;
+      }
+
+      // For both caller and callee, add call to delegate function (either
+      // loaded from the thunk or directly from the value used to initialize it)
+      if (WyvernThunkDebugging) {
+        std::string dbg_fmt;
+        std::vector<Value *> debug_args;
+        raw_string_ostream rso(dbg_fmt);
+
+        rso << "== Wyvern Debugging ==\nCalling thunk!\n";
+        rso << "\tInvoking function: " << F->getName() << "\n";
+        rso << "======================\n";
+        generatePrintf(dbg_fmt, debug_args, builder);
+      }
+
+      CallInst *thunkCall =
+          builder.CreateCall(slicedFunction->getFunctionType(), thunkCallTarget,
+                             {thunkValue}, "_wyvern_thunkcall");
+
+      // Replacing uses/users immediately can break use-def chains. Instead,
+      // keep track of all uses to be updated.
+      useCalls[&Use] = thunkCall;
+    }
+  }
+
+  // Update uses
+  for (auto &entry : useCalls) {
+    Use *use = entry.first;
+    CallInst *CI = entry.second;
+    use->set(CI);
+  }
+}
+
+/// Clones function @param Callee, replacing its formal parameter of index
+/// @param index with thunk @param thunkArg.
+static Function *cloneCalleeFunction(Function &Callee, int index,
+                                     Function &slicedFunction, Value *thunkArg,
+                                     StructType *thunkStructType, Module &M) {
+  SmallVector<Type *> argTypes;
+  for (auto &arg : Callee.args()) {
+    argTypes.push_back(arg.getType());
+  }
+  argTypes[index] = thunkArg->getType();
+
+  // generate a random number to use as suffix for clone, to avoid naming
+  // conflicts
+  // NOTE: we cannot use a simple counter that gets incremented on every
+  // clone here, because when optimizing per translation unit, the same callee
+  // may be cloned across different translation units
+  std::random_device rd;
+  std::mt19937 mt(rd());
+  std::uniform_int_distribution<int64_t> dist(1, 1000000000);
+  uint64_t random_num = dist(mt);
+  FunctionType *FT = FunctionType::get(Callee.getReturnType(), argTypes, false);
+  std::string functionName = "_wyvern_calleeclone_" + Callee.getName().str() +
+                             "_" + std::to_string(index) +
+                             std::to_string(random_num);
+  Function *newCallee =
+      Function::Create(FT, Function::ExternalLinkage, functionName, M);
+
+  ValueToValueMapTy vMap;
+  int idx = -1;
+  for (auto &arg : Callee.args()) {
+    idx++;
+    vMap[&arg] = newCallee->getArg(idx);
+    if (idx == index) {
+      newCallee->getArg(idx)->setName("_wyvern_thunkptr");
+      continue;
+    }
+    newCallee->getArg(idx)->setName(arg.getName());
+  }
+
+  SmallVector<ReturnInst *, 4> Returns;
+  CloneFunctionInto(newCallee, &Callee, vMap,
+                    CloneFunctionChangeType::LocalChangesOnly, Returns);
+  updateThunkArgUses(newCallee, newCallee->getArg(index), thunkStructType,
+                     &slicedFunction);
+  verifyFunction(*newCallee);
+
+  return newCallee;
 }
 
 bool WyvernLazyficationPass::shouldLazifyCallsitePGO(CallInst *CI,
@@ -160,145 +320,85 @@ bool WyvernLazyficationPass::loadProfileInfo(Module &M, std::string path) {
   return true;
 }
 
-/// When lazifying a callsite, there may be actual parameters which originally
-/// had associated parameters that change their optimization/implementation
-/// semantics, for instance, noalias or byref/byval. Since we replace these
-/// arguments by a thunk, these attributes are no longer valid. This function
-/// removes them.
-void removeAttributesFromThunkArgument(Value &V, unsigned int index) {
-  AttributeMask toRemove;
+static void generateThunkInitializationCode(IRBuilder<> &builder,
+                                            ProgramSlice &slice,
+                                            AllocaInst *thunkAlloca,
+                                            Function *delegateFunction,
+                                            bool memo) {
+  StructType *thunkStructType = slice.getThunkStructType(memo);
 
-  toRemove.addAttribute(Attribute::SExt);
-  toRemove.addAttribute(Attribute::ZExt);
-  toRemove.addAttribute(Attribute::NoAlias);
-  toRemove.addAttribute(Attribute::ByRef);
-  toRemove.addAttribute(Attribute::NoCapture);
-  toRemove.addAttribute(Attribute::ByVal);
-  toRemove.addAttribute(Attribute::ReadOnly);
-  toRemove.addAttribute(Attribute::WriteOnly);
+  // initialize thunk with:
+  // struct thunk {
+  //   fptr = delegateFunction
+  // }
+  Value *thunkFPtrGEP = builder.CreateStructGEP(thunkStructType, thunkAlloca, 0,
+                                                "_wyvern_thunk_fptr_gep");
+  builder.CreateStore(delegateFunction, thunkFPtrGEP);
 
-  if (CallInst *CI = dyn_cast<CallInst>(&V)) {
-    CI->removeParamAttrs(index, toRemove);
-  } else if (Function *F = dyn_cast<Function>(&V)) {
-    F->removeParamAttrs(index, toRemove);
+  if (memo) {
+    // memoized thunks also have their memoization flag:
+    // struct thunk {
+    //   ...
+    //   memo_flag = false
+    //   ...
+    // }
+    Value *thunkFlagGEP = builder.CreateStructGEP(thunkStructType, thunkAlloca,
+                                                  2, "_wyvern_thunk_flag_gep");
+    builder.CreateStore(builder.getInt1(0), thunkFlagGEP);
   }
-}
 
-/// At this point, Function @param F was subject to transformations to lazify
-/// a function call, as either the caller or the callee.
-///
-/// In regards to the caller, @param thunkValue is the thunk that is allocated
-/// within it and then passed onto a lazyfied callee. However, there may be uses
-/// of the lazyfied value @param valueToReplace other than the callsite. We
-/// replace uses of this value by calls to the thunk, so that we maximize the
-/// amount of potential dead code generation for further optimization.
-///
-/// In regards to the callee, it was lazyfied and one of its arguments is now
-/// @param thunkValue. However, uses of the argument within the function still
-/// use it as a value rather than a thunk, so we replace these uses by proper
-/// loading/invocation of the thunk.
-void updateThunkArgUses(Function *F, Value *thunkValue,
-                        StructType *thunkStructType, Function *slicedFunction,
-                        Value *valueToReplace = nullptr) {
-  // We could be adding thunk uses in either the caller or callee
-  bool isCallee = (valueToReplace == nullptr);
-  std::map<Use *, CallInst *> useCalls;
+  // add initialization of thunk environment:
+  // struct thunk {
+  //   ...
+  //   arg1 = x
+  //   arg2 = y
+  //   ...
+  // }
+  uint64_t i = (memo ? 3 : 1);
+  for (auto &arg : slice.getOrigFunctionArgs()) {
+    Value *thunkArgGEP =
+        builder.CreateStructGEP(thunkStructType, thunkAlloca, i,
+                                "_wyvern_thunk_arg_gep_" + arg->getName());
+    builder.CreateStore(arg, thunkArgGEP);
+    ++i;
+  }
 
-  IRBuilder<> builder(F->getContext());
+  if (WyvernThunkDebugging) {
+    std::string dbg_fmt;
+    std::vector<Value *> debug_args;
+    raw_string_ostream rso(dbg_fmt);
 
-  Value *toReplace = isCallee ? thunkValue : valueToReplace;
-  for (auto &Use : toReplace->uses()) {
-    Instruction *UserI = dyn_cast<Instruction>(Use.getUser());
-    if (UserI) {
-      // If the use is a PHINode, the use happens at the edge, so we cannot
-      // insert the thunk load/call at the PHI's block. Instead, we must insert
-      // them at the end of the block which flows into the PHI node
-      BasicBlock *origin = nullptr;
-      if (PHINode *PN = dyn_cast<PHINode>(UserI)) {
-        origin = PN->getIncomingBlock(Use);
-        builder.SetInsertPoint(origin->getTerminator());
-      } else {
-        builder.SetInsertPoint(UserI);
-      }
+    rso << "== Wyvern Debugging ==\nInitializing thunk with:\n";
+    rso << "\tdelegateFunction = " << delegateFunction->getName().str() << "\n";
 
-      Value *thunkCallTarget = slicedFunction;
-      // When optimizing the callee, load the function pointer from the thunk
-      if (isCallee) {
-        Value *thunkFPtrGEP = builder.CreateStructGEP(
-            thunkStructType, thunkValue, 0, "_wyvern_thunk_fptr_addr");
-        Value *thunkFPtrLoad =
-            builder.CreateLoad(thunkStructType->getStructElementType(0),
-                               thunkFPtrGEP, "_wyvern_thunkfptr");
-        thunkCallTarget = thunkFPtrLoad;
-      }
-
-      // For both caller and callee, add call to delegate function (either
-      // loaded from the thunk or directly from the value used to initialize it)
-      CallInst *thunkCall =
-          builder.CreateCall(slicedFunction->getFunctionType(), thunkCallTarget,
-                             {thunkValue}, "_wyvern_thunkcall");
-
-      // Replacing uses/users immediately can break use-def chains. Instead,
-      // keep track of all uses to be updated.
-      useCalls[&Use] = thunkCall;
+    if (memo) {
+      rso << "\t";
+      builder.getInt1(0)->getType()->print(rso);
+      rso << " memo_flag = ";
+      builder.getInt1(0)->print(rso);
+      rso << "\n";
     }
-  }
 
-  // Update uses
-  for (auto &entry : useCalls) {
-    Use *use = entry.first;
-    CallInst *CI = entry.second;
-    use->set(CI);
-  }
-}
-
-/// Clones function @param Callee, replacing its formal parameter of index
-/// @param index with thunk @param thunkArg.
-Function *cloneCalleeFunction(Function &Callee, int index,
-                              Function &slicedFunction, Value *thunkArg,
-                              StructType *thunkStructType, Module &M) {
-  SmallVector<Type *> argTypes;
-  for (auto &arg : Callee.args()) {
-    argTypes.push_back(arg.getType());
-  }
-  argTypes[index] = thunkArg->getType();
-
-  // generate a random number to use as suffix for clone, to avoid naming
-  // conflicts
-  // NOTE: we cannot use a simple counter that gets incremented on every
-  // clone here, because when optimizing per translation unit, the same callee
-  // may be cloned across different translation units
-  std::random_device rd;
-  std::mt19937 mt(rd());
-  std::uniform_int_distribution<int64_t> dist(1, 1000000000);
-  uint64_t random_num = dist(mt);
-  FunctionType *FT = FunctionType::get(Callee.getReturnType(), argTypes, false);
-  std::string functionName = "_wyvern_calleeclone_" + Callee.getName().str() +
-                             "_" + std::to_string(index) +
-                             std::to_string(random_num);
-  Function *newCallee =
-      Function::Create(FT, Function::ExternalLinkage, functionName, M);
-
-  ValueToValueMapTy vMap;
-  int idx = -1;
-  for (auto &arg : Callee.args()) {
-    idx++;
-    vMap[&arg] = newCallee->getArg(idx);
-    if (idx == index) {
-      newCallee->getArg(idx)->setName("_wyvern_thunkptr");
-      continue;
+    for (auto &arg : slice.getOrigFunctionArgs()) {
+      rso << "\t";
+      arg->getType()->print(rso);
+      rso << " " << arg->getName() << " = ";
+      if (arg->getType()->isIntegerTy()) {
+        rso << "%d";
+        debug_args.push_back(arg);
+      } else if (arg->getType()->isFloatingPointTy()) {
+        rso << "%f";
+        debug_args.push_back(arg);
+      } else if (arg->getType()->isPointerTy() && arg->getType() == builder.getInt8PtrTy()) {
+        rso << "%s";
+        debug_args.push_back(arg);
+      }
+      rso << "\n";
     }
-    newCallee->getArg(idx)->setName(arg.getName());
+
+    rso << "======================\n";
+    generatePrintf(rso.str(), debug_args, builder);
   }
-
-  SmallVector<ReturnInst *, 4> Returns;
-  CloneFunctionInto(newCallee, &Callee, vMap,
-                    CloneFunctionChangeType::LocalChangesOnly, Returns);
-  updateThunkArgUses(newCallee, newCallee->getArg(index), thunkStructType,
-                     &slicedFunction);
-  verifyFunction(*newCallee);
-
-  return newCallee;
 }
 
 /// Attempts to lazify a given call site, in terms of its actual parameter with
@@ -317,7 +417,9 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
   Function *caller = CI.getParent()->getParent();
   TargetLibraryInfo &TLI =
       getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(*caller);
-  ProgramSlice slice = ProgramSlice(*lazyfiableArg, *caller, CI, AA, TLI);
+  ProgramSlice slice =
+      ProgramSlice(*lazyfiableArg, *caller, CI, AA, TLI, WyvernThunkDebugging);
+
   if (!slice.canOutline()) {
     LLVM_DEBUG(dbgs() << "Cannot lazify argument. Slice is not outlineable!\n");
     return false;
@@ -355,10 +457,10 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
   IRBuilder<> builder(M.getContext());
   builder.SetInsertPoint(&*(caller->getEntryBlock().getFirstInsertionPt()));
 
-  Function *thunkFunction, *newCallee;
+  Function *delegateFunction, *newCallee;
   StructType *thunkStructType;
 
-  thunkFunction =
+  delegateFunction =
       WyvernLazyficationMemoization ? slice.memoizedOutline() : slice.outline();
   thunkStructType = slice.getThunkStructType(WyvernLazyficationMemoization);
 
@@ -372,60 +474,16 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
     builder.SetInsertPoint(lazyfiableArg);
   }
 
-  if (WyvernLazyficationMemoization) {
-    // initialize thunk with:
-    // struct thunk {
-    //   fptr = thunkFunction
-    //   memoed_value = undef
-    //   memo_flag = 0
-    //   arg0 = x
-    //   arg1 = y
-    //   ...
-    // }
-    Value *thunkFPtrGEP = builder.CreateStructGEP(thunkStructType, thunkAlloca,
-                                                  0, "_wyvern_thunk_fptr_gep");
-    builder.CreateStore(thunkFunction, thunkFPtrGEP);
-    Value *thunkFlagGEP = builder.CreateStructGEP(thunkStructType, thunkAlloca,
-                                                  2, "_wyvern_thunk_flag_gep");
-    builder.CreateStore(builder.getInt1(0), thunkFlagGEP);
-
-    uint64_t i = 3;
-    for (auto &arg : slice.getOrigFunctionArgs()) {
-      Value *thunkArgGEP =
-          builder.CreateStructGEP(thunkStructType, thunkAlloca, i,
-                                  "_wyvern_thunk_arg_gep_" + arg->getName());
-      builder.CreateStore(arg, thunkArgGEP);
-      ++i;
-    }
-  } else {
-    // initialize thunk with:
-    // struct thunk {
-    //   fptr = thunkFunction
-    //   arg0 = x
-    //   arg1 = y
-    //   ...
-    // }
-    Value *thunkFPtrGEP = builder.CreateStructGEP(thunkStructType, thunkAlloca,
-                                                  0, "_wyvern_thunk_fptr_gep");
-    builder.CreateStore(thunkFunction, thunkFPtrGEP);
-
-    uint64_t i = 1;
-    for (auto &arg : slice.getOrigFunctionArgs()) {
-      Value *thunkArgGEP =
-          builder.CreateStructGEP(thunkStructType, thunkAlloca, i,
-                                  "_wyvern_thunk_arg_gep_" + arg->getName());
-      builder.CreateStore(arg, thunkArgGEP);
-      ++i;
-    }
-  }
+  generateThunkInitializationCode(builder, slice, thunkAlloca, delegateFunction,
+                                  WyvernLazyficationMemoization);
 
   auto tuple = std::make_tuple(callee, index, thunkStructType);
   Function *previouslyClonedCallee = clonedCallees[tuple];
   if (previouslyClonedCallee) {
     newCallee = previouslyClonedCallee;
   } else {
-    newCallee = cloneCalleeFunction(*callee, index, *thunkFunction, thunkAlloca,
-                                    thunkStructType, M);
+    newCallee = cloneCalleeFunction(*callee, index, *delegateFunction,
+                                    thunkAlloca, thunkStructType, M);
     clonedCallees[tuple] = newCallee;
   }
 
@@ -433,10 +491,10 @@ bool WyvernLazyficationPass::lazifyCallsite(CallInst &CI, uint8_t index,
   CI.setArgOperand(index, thunkAlloca);
   removeAttributesFromThunkArgument(CI, index);
   removeAttributesFromThunkArgument(*newCallee, index);
-  updateThunkArgUses(caller, thunkAlloca, thunkStructType, thunkFunction,
+  updateThunkArgUses(caller, thunkAlloca, thunkStructType, delegateFunction,
                      lazyfiableArg);
 
-  uint64_t sliceSize = getNumberOfInsts(*thunkFunction);
+  uint64_t sliceSize = getNumberOfInsts(*delegateFunction);
   TotalSliceSize += sliceSize;
   if (LargestSliceSize < sliceSize) {
     LargestSliceSize = sliceSize;

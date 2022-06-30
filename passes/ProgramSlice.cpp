@@ -1,4 +1,5 @@
 #include "ProgramSlice.h"
+#include "DebugUtils.h"
 
 #include <map>
 #include <queue>
@@ -152,8 +153,9 @@ get_data_dependences_for(
 
 ProgramSlice::ProgramSlice(Instruction &Initial, Function &F,
                            CallInst &CallSite, AAResults *AA,
-                           TargetLibraryInfo &TLI)
-    : _AA(AA), _TLI(TLI), _initial(&Initial), _parentFunction(&F) {
+                           TargetLibraryInfo &TLI, bool thunkDebugging)
+    : _AA(AA), _TLI(TLI), _initial(&Initial), _parentFunction(&F),
+      _thunkDebugging(thunkDebugging) {
   assert(Initial.getParent()->getParent() == &F &&
          "Slicing instruction from different function!");
 
@@ -875,6 +877,18 @@ void ProgramSlice::addMemoizationCode(Function *F, ReturnInst *new_ret) {
   LoadInst *memoFlagLoad =
       builder.CreateLoad(thunkStructType->getStructElementType(2), memoFlagGEP,
                          "_wyvern_memo_flag");
+
+  if (_thunkDebugging) {
+    std::string dbg_fmt;
+    std::vector<Value *> debug_args;
+    raw_string_ostream rso(dbg_fmt);
+
+    rso << "== Wyvern Debugging ==\nEvaluating thunk!\n";
+    rso << "\ti1 memo_flag = %d\n";
+    debug_args.push_back(memoFlagLoad);
+    rso << "======================\n";
+    generatePrintf(dbg_fmt, debug_args, builder);
+  }
 
   // add if (memoFlag == true) { return memo_val; }
   Value *toBool = builder.CreateTruncOrBitCast(
