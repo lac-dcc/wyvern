@@ -22,7 +22,7 @@ Once you are done with `make`, you should have a folder called `passes` in your 
 
 ## Running
 
-Once you compile our LLVM pass, you can load it in the LLVM [optimizer](https://llvm.org/docs/CommandGuide/opt.html). This repository contains a few examples of code that are likely to benefit from lazification in the `test` folder. For instance, check out the file `test_performance.c`, which contains the code that we shall use as an example further down. You can translate this file into LLVM bytecodes as follows:
+Once you compile our LLVM pass, you can load it in the LLVM [optimizer](https://llvm.org/docs/CommandGuide/opt.html). This repository contains a few examples of code likely to benefit from lazification in the `test` folder. For instance, check out the file `test_performance.c`, which contains the code that we shall use as an example further down. You can translate this file into LLVM bytecodes as follows:
 
 ```shell
 clang -S -c -emit-llvm -Xclang -disable-O0-optnone test_performance.c  -o test.ll
@@ -46,6 +46,20 @@ clang test_lazyfied.ll -O3 -o test_lazified.exe
 time ./test.exe 1000000000
 time ./test_lazified.exe 1000000000
 ```
+
+## Debugging
+
+Our implementation contains some support for debugging.
+Once debugging is active, something that you can do via the `wylazy-debug=true` flag,
+our pass will print runtime data on thunk initialization and evaluation.
+To see debugging data, try running lazification with the following commands:
+
+```shell
+WYVERN_LIB="~/wyvern/build/passes/libWyvern.so"
+opt test.ll -enable-new-pm=0 -load $WYVERN_LIB -lazify-callsites -wylazy-debug=true \
+ -O3 -S -o test_lazified.ll
+```
+
 
 ## Running with LTO
 
