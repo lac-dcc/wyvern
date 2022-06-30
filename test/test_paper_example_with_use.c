@@ -26,7 +26,7 @@ int caller(char *s0, int *keys, int N) {
 }
 
 int main() {
-  int keys[1000000];
+  int *keys = (int *) malloc(1000000 * sizeof(int));
   for (int i = 0; i < 1000000; i++) {
     keys[i] = rand();
   }
@@ -38,4 +38,5 @@ int main() {
     fscanf(stdin, "%s\n", str);
     caller(str, keys, 1000000);
   }
+  free(keys);
 }
