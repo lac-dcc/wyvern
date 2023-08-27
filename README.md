@@ -5,7 +5,11 @@ In [strict programming languages](https://en.wikipedia.org/wiki/Evaluation_strat
 This transformation involves a static analysis to identify function calls that are candidates for lazification, plus a code extraction technique that generates [closures](https://en.wikipedia.org/wiki/Closure_(computer_programming)) to be lazily activated. Code extraction uses an adaptation of the classic program [slicing](https://en.wikipedia.org/wiki/Program_slicing) technique adjusted for the [static single assignment](https://en.wikipedia.org/wiki/Static_single-assignment_form) (SSA) representation. If lazification is guided by profiling information, then it can deliver speedups even on traditional benchmarks that are heavily optimized.
 
 We have implemented lazification onto [LLVM](https://llvm.org/) 14.0, and have applied it onto hundreds of C/C++ programs from the LLVM test-suite and from [SPEC CPU2017](https://www.spec.org/cpu2017/). During this evaluation, we could observe statistically significant speedups over [clang](https://clang.llvm.org/) -O3 on some large programs, including a speedup of 11.1% on Prolang's `Bison` and a speedup of 4.6% on SPEC CPU2017's `perlbench`, which has more than 1.7 million LLVM instructions once compiled with clang -O3.
-To know more about our ideas, please, read the [Technical Report](http://lac.dcc.ufmg.br/pubs/TechReports/LaC_TechReport012022.pdf).
+
+## Documentation
+
+Lazification was described in a [paper](https://homepages.dcc.ufmg.br/~fernando/publications/papers/CC23_Breno.pdf) published in the 2023 edition of the International Conference on Compiler Construction (CC'23).
+An extended version of this paper is available as a [Technical Report](http://lac.dcc.ufmg.br/pubs/TechReports/LaC_TechReport012022.pdf).
 
 ## Building
 
