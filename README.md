@@ -9,7 +9,7 @@ We have implemented lazification onto [LLVM](https://llvm.org/) 14.0, and have a
 ## Documentation
 
 Lazification was described in a [paper](https://homepages.dcc.ufmg.br/~fernando/publications/papers/CC23_Breno.pdf) published in the 2023 edition of the International Conference on Compiler Construction (CC'23).
-An extended version of this paper is available as a [Technical Report](http://lac.dcc.ufmg.br/pubs/TechReports/LaC_TechReport012022.pdf).
+An extended version of this paper is available as a [Technical Report](assets/TechReport012022.pdf).
 
 ## Building
 
